@@ -1288,6 +1288,16 @@ def leaderboard():
         SELECT u.display_name, COALESCE(SUM(s.points),0) AS score, MAX(s.ts) AS last_solve
         FROM users u LEFT JOIN solves s ON s.user_id=u.id
         GROUP BY u.id ORDER BY score DESC, last_solve ASC""", fetchall=True)
+    fb_rows = qexec("""
+        SELECT s.user_id, COUNT(*) AS fb_count FROM solves s
+        INNER JOIN (SELECT challenge, MIN(ts) AS first_ts FROM solves GROUP BY challenge) f
+        ON s.challenge=f.challenge AND s.ts=f.first_ts
+        GROUP BY s.user_id""", fetchall=True)
+    fb_by_name = {}
+    for fb in fb_rows:
+        u = qexec("SELECT display_name FROM users WHERE id=?", (fb["user_id"],), fetchone=True)
+        if u:
+            fb_by_name[u["display_name"]] = fb["fb_count"]
     top3 = [r for r in rows[:3] if r["score"] > 0]
     return render("""
         <div class="sect reveal"><h2>Leaderboard</h2></div>
@@ -1299,6 +1309,7 @@ def leaderboard():
             <div class="podium-medal">🥈</div>
             <div class="podium-name">{{ top3[1]['display_name'] }}</div>
             <div class="podium-score">{{ top3[1]['score'] }}</div>
+            {% if fb.get(top3[1]['display_name'],0) > 0 %}<div style="color:var(--red);font-size:12px;margin-top:4px">🩸 {{ fb[top3[1]['display_name']] }} First Blood{{ 's' if fb[top3[1]['display_name']] > 1 }}</div>{% endif %}
             <div class="podium-label">2nd Place</div>
           </div>
           {% endif %}
@@ -1306,6 +1317,7 @@ def leaderboard():
             <div class="podium-medal">🥇</div>
             <div class="podium-name">{{ top3[0]['display_name'] }}</div>
             <div class="podium-score">{{ top3[0]['score'] }}</div>
+            {% if fb.get(top3[0]['display_name'],0) > 0 %}<div style="color:var(--red);font-size:12px;margin-top:4px">🩸 {{ fb[top3[0]['display_name']] }} First Blood{{ 's' if fb[top3[0]['display_name']] > 1 }}</div>{% endif %}
             <div class="podium-label">1st Place</div>
           </div>
           {% if top3|length >= 3 %}
@@ -1313,6 +1325,7 @@ def leaderboard():
             <div class="podium-medal">🥉</div>
             <div class="podium-name">{{ top3[2]['display_name'] }}</div>
             <div class="podium-score">{{ top3[2]['score'] }}</div>
+            {% if fb.get(top3[2]['display_name'],0) > 0 %}<div style="color:var(--red);font-size:12px;margin-top:4px">🩸 {{ fb[top3[2]['display_name']] }} First Blood{{ 's' if fb[top3[2]['display_name']] > 1 }}</div>{% endif %}
             <div class="podium-label">3rd Place</div>
           </div>
           {% endif %}
@@ -1324,7 +1337,8 @@ def leaderboard():
             <thead><tr>
               <th style="width:70px">Rank</th>
               <th>Player</th>
-              <th style="width:120px">Points</th>
+              <th style="width:100px">Points</th>
+              <th style="width:90px">🩸 First Blood</th>
               <th>Last Solve</th>
             </tr></thead>
             <tbody>
@@ -1343,6 +1357,13 @@ def leaderboard():
                   {% if user and r['display_name']==user['display_name'] %} <span class="tag" style="font-size:10px;padding:2px 8px;border-color:var(--green);color:var(--green)">you</span>{% endif %}
                 </td>
                 <td class="mono" style="color:var(--green);font-weight:700;font-size:16px">{{ r['score'] }}</td>
+                <td style="text-align:center">
+                  {% if fb.get(r['display_name'],0) > 0 %}
+                    <span style="color:var(--red);font-weight:700">{{ fb[r['display_name']] }}</span>
+                  {% else %}
+                    <span class="muted">—</span>
+                  {% endif %}
+                </td>
                 <td>
                   {% if r['last_solve'] %}
                     <span class="time-ago" data-time="{{ r['last_solve'] }}">{{ r['last_solve'] }}</span>
@@ -1372,7 +1393,7 @@ def leaderboard():
           el.title=ts;
         });
         </script>
-        """, rows=rows, top3=top3, title="Leaderboard — CCSIT CTF", nav="lb")
+        """, rows=rows, top3=top3, fb=fb_by_name, title="Leaderboard — CCSIT CTF", nav="lb")
 
 
 # ---------------------------------------------------------------------------
