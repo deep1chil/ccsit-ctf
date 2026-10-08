@@ -39,7 +39,10 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(hours=6)
 HERE = os.path.dirname(os.path.abspath(__file__))
-DB = os.path.join(HERE, "ctf.db")
+if os.environ.get("RENDER"):
+    DB = "/tmp/ctf.db"
+else:
+    DB = os.path.join(HERE, "ctf.db")
 
 CLUB_AR = "نادي الأمن السيبراني"
 UNI_AR = "جامعة الملك فيصل · كلية علوم الحاسب وتقنية المعلومات"
