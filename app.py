@@ -207,6 +207,23 @@ def health():
         return {"status": "error", "error": str(e)}, 500
 
 
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
+
+
+@app.route("/admin/delete-user", methods=["POST"])
+def admin_delete_user():
+    if not ADMIN_KEY or request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        abort(403)
+    email = request.json.get("email", "").strip().lower()
+    if not email:
+        return jsonify(error="email required"), 400
+    qexec("DELETE FROM solves WHERE user_id IN (SELECT id FROM users WHERE email=?)", (email,))
+    qexec("DELETE FROM password_resets WHERE user_id IN (SELECT id FROM users WHERE email=?)", (email,))
+    qexec("DELETE FROM users WHERE email=?", (email,))
+    db().commit()
+    return jsonify(ok=True, deleted=email)
+
+
 def init_db():
     if USE_PG:
         conn = psycopg2.connect(DATABASE_URL)
