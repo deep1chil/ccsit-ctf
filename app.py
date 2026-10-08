@@ -1240,7 +1240,16 @@ def challenge(cid):
             sbtn.disabled=false;sbtn.textContent='Submit';
             sout.className=d.correct?'win':'bad';sout.style.display='block';
             sout.textContent=d.message;
-            if(d.correct){fireConfetti();setTimeout(()=>location.reload(),2000)}
+            if(d.correct){
+              fireConfetti();
+              if(d.first_blood){
+                sout.innerHTML='<span style="font-size:24px">🩸</span> '+d.message+' <span style="font-size:24px">🩸</span>';
+                sout.style.background='linear-gradient(135deg,rgba(239,68,68,.15),rgba(234,179,8,.15))';
+                sout.style.borderColor='var(--red)';
+                fireConfetti();setTimeout(fireConfetti,500);setTimeout(fireConfetti,1000);
+              }
+              setTimeout(()=>location.reload(),2500)
+            }
           };
         </script>
         """, c=c, cur=chal_url(c), solved=solved, solvers=solvers,
@@ -1260,11 +1269,17 @@ def submit():
     if qexec("SELECT 1 FROM solves WHERE user_id=? AND challenge=?",
               (session["uid"], c["id"]), fetchone=True):
         return jsonify(correct=True, message="Correct — already solved!")
+    first_blood = not qexec("SELECT 1 FROM solves WHERE challenge=?", (c["id"],), fetchone=True)
+    FIRST_BLOOD_BONUS = 50
+    pts = c["points"] + (FIRST_BLOOD_BONUS if first_blood else 0)
     qexec("INSERT INTO solves (user_id,challenge,points,ts) VALUES (?,?,?,?)",
-          (session["uid"], c["id"], c["points"],
+          (session["uid"], c["id"], pts,
            datetime.datetime.now().isoformat(timespec="seconds")))
     db().commit()
-    return jsonify(correct=True, message=f"Correct! +{c['points']} points")
+    if first_blood:
+        return jsonify(correct=True, first_blood=True,
+                       message=f"FIRST BLOOD! +{c['points']} + {FIRST_BLOOD_BONUS} bonus = {pts} points!")
+    return jsonify(correct=True, message=f"Correct! +{pts} points")
 
 
 @app.route("/leaderboard")
