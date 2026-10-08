@@ -149,8 +149,9 @@ def db():
     if "db" not in g:
         g.db = sqlite3.connect(DB)
         g.db.row_factory = sqlite3.Row
-        g.db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, pw_hash TEXT NOT NULL, created TEXT NOT NULL)")
+        g.db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, pw_hash TEXT NOT NULL, created TEXT NOT NULL)")
         g.db.execute("CREATE TABLE IF NOT EXISTS solves (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, challenge TEXT NOT NULL, points INTEGER NOT NULL, ts TEXT NOT NULL, UNIQUE(user_id, challenge))")
+        g.db.execute("CREATE TABLE IF NOT EXISTS password_resets (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, token TEXT UNIQUE NOT NULL, created TEXT NOT NULL, used INTEGER DEFAULT 0)")
     return g.db
 
 
@@ -177,7 +178,8 @@ def init_db():
     c.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE NOT NULL,
+            display_name TEXT NOT NULL,
             pw_hash TEXT NOT NULL,
             created TEXT NOT NULL
         );
@@ -188,6 +190,13 @@ def init_db():
             points INTEGER NOT NULL,
             ts TEXT NOT NULL,
             UNIQUE(user_id, challenge)
+        );
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT UNIQUE NOT NULL,
+            created TEXT NOT NULL,
+            used INTEGER DEFAULT 0
         );
     """)
     c.commit()
@@ -676,17 +685,20 @@ HERO = """
 def register():
     err = ""
     if request.method == "POST":
-        u = (request.form.get("username") or "").strip()
+        email = (request.form.get("email") or "").strip().lower()
+        name = (request.form.get("display_name") or "").strip()
         p = request.form.get("password") or ""
         p2 = request.form.get("password2") or ""
-        if not u or not p:
-            err = "Username and password required."
-        elif len(u) > 32:
-            err = "Username too long (max 32 chars)."
-        elif len(u) < 3:
-            err = "Username too short (min 3 chars)."
-        elif not re.match(r'^[a-zA-Z0-9_.\- ]+$', u):
-            err = "Username: letters, numbers, spaces, _ . - only."
+        if not email or not p or not name:
+            err = "All fields are required."
+        elif not re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+            err = "Enter a valid email address."
+        elif len(name) > 32:
+            err = "Display name too long (max 32 chars)."
+        elif len(name) < 2:
+            err = "Display name too short (min 2 chars)."
+        elif not re.match(r'^[a-zA-Z0-9_.\- ]+$', name):
+            err = "Display name: letters, numbers, spaces, _ . - only."
         elif p != p2:
             err = "Passwords don't match."
         else:
@@ -697,15 +709,15 @@ def register():
                 try:
                     init_db()
                     d = db()
-                    d.execute("INSERT INTO users (username,pw_hash,created) VALUES (?,?,?)",
-                              (u, generate_password_hash(p),
+                    d.execute("INSERT INTO users (email,display_name,pw_hash,created) VALUES (?,?,?,?)",
+                              (email, name, generate_password_hash(p),
                                datetime.datetime.now().isoformat(timespec="seconds")))
                     d.commit()
                     session.permanent = True
-                    session["uid"] = d.execute("SELECT id FROM users WHERE username=?", (u,)).fetchone()["id"]
+                    session["uid"] = d.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()["id"]
                     return redirect(url_for("index"))
                 except sqlite3.IntegrityError:
-                    err = "Username already taken."
+                    err = "Email already registered."
                 except Exception as e:
                     err = "Registration error. Please try again."
                     app.logger.error("Register error: %s", e)
@@ -714,8 +726,10 @@ def register():
           <div class="sect"><h2>Create Account</h2></div>
           {% if err %}<p class="err">{{ err }}</p>{% endif %}
           <form method="post">
-            <label>Username</label>
-            <input name="username" autocomplete="off" placeholder="Pick a username" maxlength="32" required>
+            <label>Email</label>
+            <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+            <label>Display Name</label>
+            <input name="display_name" autocomplete="off" placeholder="How others see you" maxlength="32" required>
             <label>Password</label>
             <input name="password" type="password" id="pw1" autocomplete="new-password" placeholder="Min 8 chars, mixed case + digit" required>
             <div class="pw-meter">
@@ -780,9 +794,9 @@ def login():
             remaining = int(LOGIN_WINDOW - (time.time() - min(_login_attempts[ip])))
             err = f"Too many attempts. Try again in {remaining // 60 + 1} min."
         else:
-            u = (request.form.get("username") or "").strip()
+            email = (request.form.get("email") or "").strip().lower()
             p = request.form.get("password") or ""
-            row = db().execute("SELECT * FROM users WHERE username=?", (u,)).fetchone()
+            row = db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
             if row and check_password_hash(row["pw_hash"], p):
                 _login_attempts.pop(ip, None)
                 session.permanent = True
@@ -796,13 +810,16 @@ def login():
           <div class="sect"><h2>Welcome Back</h2></div>
           {% if err %}<p class="err">{{ err }}</p>{% endif %}
           <form method="post">
-            <label>Username</label>
-            <input name="username" autocomplete="off" placeholder="Your username" required>
+            <label>Email</label>
+            <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
             <label>Password</label>
             <input name="password" type="password" autocomplete="current-password" placeholder="Your password" required>
             <button class="btn" style="width:100%">Login</button>
           </form>
-          <p class="muted" style="margin-top:16px;margin-bottom:0;text-align:center">
+          <p class="muted" style="margin-top:12px;margin-bottom:0;text-align:center">
+            <a class="link" href="{{ url_for('forgot_password') }}">Forgot password?</a>
+          </p>
+          <p class="muted" style="margin-top:8px;margin-bottom:0;text-align:center">
             New here? <a class="link" href="{{ url_for('register') }}">Create account</a>
           </p>
         </div>""", err=err, title="Login — CCSIT CTF", nav="login")
@@ -812,6 +829,145 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    msg = ""
+    err = ""
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        if not email:
+            err = "Enter your email address."
+        else:
+            row = db().execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+            if row:
+                token = secrets.token_urlsafe(32)
+                d = db()
+                d.execute("INSERT INTO password_resets (user_id,token,created) VALUES (?,?,?)",
+                          (row["id"], token, datetime.datetime.now().isoformat(timespec="seconds")))
+                d.commit()
+                reset_url = request.host_url.rstrip("/") + url_for("reset_password", token=token)
+                msg = f'Reset link: <a class="link" href="{reset_url}" style="word-break:break-all">{reset_url}</a>'
+            else:
+                msg = "If an account with that email exists, a reset link has been generated."
+    return render(HERO + """
+        <div class="card reveal" style="max-width:460px;margin:0 auto">
+          <div class="sect"><h2>Forgot Password</h2></div>
+          <p class="muted" style="margin-top:0">Enter your email and we'll generate a reset link.</p>
+          {% if err %}<p class="err">{{ err }}</p>{% endif %}
+          {% if msg %}<div class="ok-msg" style="background:rgba(34,197,94,.1);border:1px solid var(--green);border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:14px;color:var(--green)">{{ msg|safe }}</div>{% endif %}
+          <form method="post">
+            <label>Email</label>
+            <input name="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+            <button class="btn" style="width:100%">Get Reset Link</button>
+          </form>
+          <p class="muted" style="margin-top:16px;margin-bottom:0;text-align:center">
+            <a class="link" href="{{ url_for('login') }}">Back to Login</a>
+          </p>
+        </div>""", err=err, msg=msg, title="Forgot Password — CCSIT CTF", nav="")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    d = db()
+    reset = d.execute("""
+        SELECT pr.*, u.email FROM password_resets pr JOIN users u ON u.id=pr.user_id
+        WHERE pr.token=? AND pr.used=0""", (token,)).fetchone()
+    if not reset:
+        return render(HERO + """
+            <div class="card reveal" style="max-width:460px;margin:0 auto">
+              <div class="sect"><h2>Invalid Link</h2></div>
+              <p class="muted">This reset link is invalid or has already been used.</p>
+              <p style="text-align:center"><a class="link" href="{{ url_for('forgot_password') }}">Request a new one</a></p>
+            </div>""", title="Reset Password — CCSIT CTF", nav="")
+    created = datetime.datetime.fromisoformat(reset["created"])
+    if (datetime.datetime.now() - created).total_seconds() > 3600:
+        return render(HERO + """
+            <div class="card reveal" style="max-width:460px;margin:0 auto">
+              <div class="sect"><h2>Link Expired</h2></div>
+              <p class="muted">This reset link has expired (1 hour limit).</p>
+              <p style="text-align:center"><a class="link" href="{{ url_for('forgot_password') }}">Request a new one</a></p>
+            </div>""", title="Reset Password — CCSIT CTF", nav="")
+    err = ""
+    if request.method == "POST":
+        p = request.form.get("password") or ""
+        p2 = request.form.get("password2") or ""
+        if not p:
+            err = "Password is required."
+        elif p != p2:
+            err = "Passwords don't match."
+        else:
+            pw_errs = check_password_policy(p)
+            if pw_errs:
+                err = "Password needs: " + ", ".join(pw_errs) + "."
+            else:
+                d.execute("UPDATE users SET pw_hash=? WHERE id=?",
+                          (generate_password_hash(p), reset["user_id"]))
+                d.execute("UPDATE password_resets SET used=1 WHERE id=?", (reset["id"],))
+                d.commit()
+                return render(HERO + """
+                    <div class="card reveal" style="max-width:460px;margin:0 auto">
+                      <div class="sect"><h2>Password Reset</h2></div>
+                      <p style="color:var(--green);text-align:center">Your password has been updated successfully!</p>
+                      <p style="text-align:center"><a class="btn" href="{{ url_for('login') }}" style="display:inline-block;text-decoration:none">Login Now</a></p>
+                    </div>""", title="Password Reset — CCSIT CTF", nav="")
+    return render(HERO + r"""
+        <div class="card reveal" style="max-width:460px;margin:0 auto">
+          <div class="sect"><h2>Set New Password</h2></div>
+          <p class="muted" style="margin-top:0">Resetting password for <b>{{ email }}</b></p>
+          {% if err %}<p class="err">{{ err }}</p>{% endif %}
+          <form method="post">
+            <label>New Password</label>
+            <input name="password" type="password" id="pw1" autocomplete="new-password" placeholder="Min 8 chars, mixed case + digit" required>
+            <div class="pw-meter">
+              <div class="pw-bar"><span id="pwbar"></span></div>
+              <span class="pw-label" id="pwlabel"></span>
+            </div>
+            <div class="pw-rules" id="pwrules">
+              <div id="r_len" class="no">✗ 8+ characters</div>
+              <div id="r_up" class="no">✗ Uppercase letter</div>
+              <div id="r_lo" class="no">✗ Lowercase letter</div>
+              <div id="r_dig" class="no">✗ Digit</div>
+            </div>
+            <label>Confirm Password</label>
+            <input name="password2" type="password" id="pw2" autocomplete="new-password" placeholder="Re-enter password" required>
+            <div id="pw_match" style="font-size:12px;margin:-10px 0 14px"></div>
+            <button class="btn" style="width:100%">Reset Password</button>
+          </form>
+        </div>
+        <script>
+        (function(){
+          var pw=document.getElementById('pw1'),bar=document.getElementById('pwbar'),
+              lbl=document.getElementById('pwlabel'),pw2=document.getElementById('pw2'),
+              mtch=document.getElementById('pw_match');
+          var rules={len:document.getElementById('r_len'),up:document.getElementById('r_up'),
+                     lo:document.getElementById('r_lo'),dig:document.getElementById('r_dig')};
+          function check(v){
+            var s=0,c={len:v.length>=8,up:/[A-Z]/.test(v),lo:/[a-z]/.test(v),dig:/[0-9]/.test(v)};
+            for(var k in c){
+              var txt=rules[k].textContent.slice(2);
+              if(c[k]){s++;rules[k].className='ok';rules[k].textContent='✓ '+txt}
+              else{rules[k].className='no';rules[k].textContent='✗ '+txt}
+            }
+            if(v.length>=12&&s>=4)s=5;
+            var pct=[0,20,40,60,80,100][s],
+                colors=['var(--red)','var(--red)','#f97316','var(--gold)','var(--green)','var(--green)'],
+                labels=['','Weak','Fair','Good','Strong','Very Strong'];
+            bar.style.width=pct+'%';bar.style.background=colors[s];
+            lbl.textContent=labels[s];lbl.style.color=colors[s];
+          }
+          pw.addEventListener('input',function(){check(this.value)});
+          function matchCheck(){
+            if(!pw2.value){mtch.textContent='';return}
+            if(pw.value===pw2.value){mtch.style.color='var(--green)';mtch.textContent='✓ Passwords match'}
+            else{mtch.style.color='var(--red)';mtch.textContent='✗ Passwords don\'t match'}
+          }
+          pw2.addEventListener('input',matchCheck);
+          pw.addEventListener('input',matchCheck);
+        })();
+        </script>
+        """, err=err, email=reset["email"], title="Reset Password — CCSIT CTF", nav="")
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +986,7 @@ def index():
         <div class="welcome reveal">
           <div>
             <div class="muted" style="font-size:13px">Welcome back,</div>
-            <div class="wname">{{ user['username'] }}</div>
+            <div class="wname">{{ user['display_name'] }}</div>
           </div>
           <div class="prog">
             <div class="prow"><span>Progress</span><span class="mono">{{ pct }}%</span></div>
@@ -876,9 +1032,9 @@ def challenge(cid):
     solved = cid in my_solves()
     solvers = db().execute("SELECT COUNT(*) c FROM solves WHERE challenge=?", (cid,)).fetchone()["c"]
     first_solver = db().execute("""
-        SELECT u.username FROM solves s JOIN users u ON u.id=s.user_id
+        SELECT u.display_name FROM solves s JOIN users u ON u.id=s.user_id
         WHERE s.challenge=? ORDER BY s.ts ASC LIMIT 1""", (cid,)).fetchone()
-    first_name = first_solver["username"] if first_solver else None
+    first_name = first_solver["display_name"] if first_solver else None
     return render("""
         <a href="{{ url_for('index') }}" class="muted" style="font-size:13px;display:inline-flex;align-items:center;gap:6px">
           <span style="font-size:18px">←</span> All challenges
@@ -1030,7 +1186,7 @@ def submit():
 @app.route("/leaderboard")
 def leaderboard():
     rows = db().execute("""
-        SELECT u.username, COALESCE(SUM(s.points),0) AS score, MAX(s.ts) AS last_solve
+        SELECT u.display_name, COALESCE(SUM(s.points),0) AS score, MAX(s.ts) AS last_solve
         FROM users u LEFT JOIN solves s ON s.user_id=u.id
         GROUP BY u.id ORDER BY score DESC, last_solve ASC""").fetchall()
     top3 = [r for r in rows[:3] if r["score"] > 0]
@@ -1042,21 +1198,21 @@ def leaderboard():
           {% if top3|length >= 2 %}
           <div class="podium-card second">
             <div class="podium-medal">🥈</div>
-            <div class="podium-name">{{ top3[1]['username'] }}</div>
+            <div class="podium-name">{{ top3[1]['display_name'] }}</div>
             <div class="podium-score">{{ top3[1]['score'] }}</div>
             <div class="podium-label">2nd Place</div>
           </div>
           {% endif %}
           <div class="podium-card first">
             <div class="podium-medal">🥇</div>
-            <div class="podium-name">{{ top3[0]['username'] }}</div>
+            <div class="podium-name">{{ top3[0]['display_name'] }}</div>
             <div class="podium-score">{{ top3[0]['score'] }}</div>
             <div class="podium-label">1st Place</div>
           </div>
           {% if top3|length >= 3 %}
           <div class="podium-card third">
             <div class="podium-medal">🥉</div>
-            <div class="podium-name">{{ top3[2]['username'] }}</div>
+            <div class="podium-name">{{ top3[2]['display_name'] }}</div>
             <div class="podium-score">{{ top3[2]['score'] }}</div>
             <div class="podium-label">3rd Place</div>
           </div>
@@ -1078,14 +1234,14 @@ def leaderboard():
               {% if loop.index==1 and r['score']>0 %}{% set _ = cls.append('gold') %}{% endif %}
               {% if loop.index==2 and r['score']>0 %}{% set _ = cls.append('silver') %}{% endif %}
               {% if loop.index==3 and r['score']>0 %}{% set _ = cls.append('bronze') %}{% endif %}
-              {% if user and r['username']==user['username'] %}{% set _ = cls.append('me') %}{% endif %}
+              {% if user and r['display_name']==user['display_name'] %}{% set _ = cls.append('me') %}{% endif %}
               <tr class="{{ cls|join(' ') }}">
                 <td class="rkn">
                   {% if loop.index==1 and r['score']>0 %}🥇{% elif loop.index==2 and r['score']>0 %}🥈{% elif loop.index==3 and r['score']>0 %}🥉{% else %}{{ loop.index }}{% endif %}
                 </td>
                 <td style="font-weight:600">
-                  {{ r['username'] }}
-                  {% if user and r['username']==user['username'] %} <span class="tag" style="font-size:10px;padding:2px 8px;border-color:var(--green);color:var(--green)">you</span>{% endif %}
+                  {{ r['display_name'] }}
+                  {% if user and r['display_name']==user['display_name'] %} <span class="tag" style="font-size:10px;padding:2px 8px;border-color:var(--green);color:var(--green)">you</span>{% endif %}
                 </td>
                 <td class="mono" style="color:var(--green);font-weight:700;font-size:16px">{{ r['score'] }}</td>
                 <td>
