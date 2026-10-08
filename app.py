@@ -33,16 +33,19 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_PG = bool(DATABASE_URL)
+if USE_PG:
+    import psycopg2
+    import psycopg2.extras
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = datetime.timedelta(hours=6)
 HERE = os.path.dirname(os.path.abspath(__file__))
-if os.environ.get("RENDER"):
-    DB = "/tmp/ctf.db"
-else:
-    DB = os.path.join(HERE, "ctf.db")
+DB = os.path.join(HERE, "ctf.db")
 
 CLUB_AR = "نادي الأمن السيبراني"
 UNI_AR = "جامعة الملك فيصل · كلية علوم الحاسب وتقنية المعلومات"
@@ -145,14 +148,46 @@ def lab_corpleak_login():
     return _corpleak.login()
 
 
+class PgRowWrapper:
+    def __init__(self, row, desc):
+        self._data = {desc[i].name: row[i] for i in range(len(desc))}
+    def __getitem__(self, key):
+        return self._data[key]
+    def keys(self):
+        return self._data.keys()
+
+
 def db():
     if "db" not in g:
-        g.db = sqlite3.connect(DB)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, pw_hash TEXT NOT NULL, created TEXT NOT NULL)")
-        g.db.execute("CREATE TABLE IF NOT EXISTS solves (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, challenge TEXT NOT NULL, points INTEGER NOT NULL, ts TEXT NOT NULL, UNIQUE(user_id, challenge))")
-        g.db.execute("CREATE TABLE IF NOT EXISTS password_resets (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, token TEXT UNIQUE NOT NULL, created TEXT NOT NULL, used INTEGER DEFAULT 0)")
+        if USE_PG:
+            g.db = psycopg2.connect(DATABASE_URL)
+            g.db.autocommit = False
+        else:
+            g.db = sqlite3.connect(DB)
+            g.db.row_factory = sqlite3.Row
     return g.db
+
+
+def qexec(sql, params=(), fetchone=False, fetchall=False):
+    d = db()
+    if USE_PG:
+        sql = sql.replace("?", "%s").replace("AUTOINCREMENT", "")
+        cur = d.cursor()
+        cur.execute(sql, params)
+        if fetchone:
+            row = cur.fetchone()
+            return PgRowWrapper(row, cur.description) if row else None
+        if fetchall:
+            desc = cur.description
+            return [PgRowWrapper(r, desc) for r in cur.fetchall()]
+        return cur
+    else:
+        cur = d.execute(sql, params)
+        if fetchone:
+            return cur.fetchone()
+        if fetchall:
+            return cur.fetchall()
+        return cur
 
 
 @app.teardown_appcontext
@@ -165,49 +200,79 @@ def close_db(exc):
 @app.route("/health")
 def health():
     try:
-        c = sqlite3.connect(DB)
-        c.execute("SELECT 1")
-        c.close()
-        return {"status": "ok", "db": DB, "render": bool(os.environ.get("RENDER"))}
+        d = db()
+        qexec("SELECT 1")
+        return {"status": "ok", "pg": USE_PG}
     except Exception as e:
-        return {"status": "error", "db": DB, "error": str(e)}, 500
+        return {"status": "error", "error": str(e)}, 500
 
 
 def init_db():
-    c = sqlite3.connect(DB)
-    c.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            display_name TEXT NOT NULL,
-            pw_hash TEXT NOT NULL,
-            created TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS solves (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            challenge TEXT NOT NULL,
-            points INTEGER NOT NULL,
-            ts TEXT NOT NULL,
-            UNIQUE(user_id, challenge)
-        );
-        CREATE TABLE IF NOT EXISTS password_resets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            token TEXT UNIQUE NOT NULL,
-            created TEXT NOT NULL,
-            used INTEGER DEFAULT 0
-        );
-    """)
-    c.commit()
-    c.close()
+    if USE_PG:
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id SERIAL PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT NOT NULL,
+                pw_hash TEXT NOT NULL,
+                created TEXT NOT NULL
+            )""")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS solves (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                challenge TEXT NOT NULL,
+                points INTEGER NOT NULL,
+                ts TEXT NOT NULL,
+                UNIQUE(user_id, challenge)
+            )""")
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                created TEXT NOT NULL,
+                used INTEGER DEFAULT 0
+            )""")
+        conn.commit()
+        conn.close()
+    else:
+        c = sqlite3.connect(DB)
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT NOT NULL,
+                pw_hash TEXT NOT NULL,
+                created TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS solves (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                challenge TEXT NOT NULL,
+                points INTEGER NOT NULL,
+                ts TEXT NOT NULL,
+                UNIQUE(user_id, challenge)
+            );
+            CREATE TABLE IF NOT EXISTS password_resets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token TEXT UNIQUE NOT NULL,
+                created TEXT NOT NULL,
+                used INTEGER DEFAULT 0
+            );
+        """)
+        c.commit()
+        c.close()
 
 init_db()
 
 
 def current_user():
     uid = session.get("uid")
-    return db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone() if uid else None
+    return qexec("SELECT * FROM users WHERE id=?", (uid,), fetchone=True) if uid else None
 
 
 def login_required(fn):
@@ -226,15 +291,15 @@ def has_logo():
 def my_solves():
     if not session.get("uid"):
         return set()
-    rows = db().execute("SELECT challenge FROM solves WHERE user_id=?", (session["uid"],)).fetchall()
+    rows = qexec("SELECT challenge FROM solves WHERE user_id=?", (session["uid"],), fetchall=True)
     return {r["challenge"] for r in rows}
 
 
 def my_score():
     if not session.get("uid"):
         return 0
-    return db().execute("SELECT COALESCE(SUM(points),0) s FROM solves WHERE user_id=?",
-                        (session["uid"],)).fetchone()["s"]
+    return qexec("SELECT COALESCE(SUM(points),0) AS s FROM solves WHERE user_id=?",
+                  (session["uid"],), fetchone=True)["s"]
 
 
 @app.route("/logo.png")
@@ -707,20 +772,24 @@ def register():
                 err = "Password needs: " + ", ".join(pw_errs) + "."
             else:
                 try:
-                    init_db()
-                    d = db()
-                    d.execute("INSERT INTO users (email,display_name,pw_hash,created) VALUES (?,?,?,?)",
-                              (email, name, generate_password_hash(p),
-                               datetime.datetime.now().isoformat(timespec="seconds")))
-                    d.commit()
+                    qexec("INSERT INTO users (email,display_name,pw_hash,created) VALUES (?,?,?,?)",
+                          (email, name, generate_password_hash(p),
+                           datetime.datetime.now().isoformat(timespec="seconds")))
+                    db().commit()
                     session.permanent = True
-                    session["uid"] = d.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()["id"]
+                    session["uid"] = qexec("SELECT id FROM users WHERE email=?", (email,), fetchone=True)["id"]
                     return redirect(url_for("index"))
-                except sqlite3.IntegrityError:
-                    err = "Email already registered."
                 except Exception as e:
-                    err = "Registration error. Please try again."
-                    app.logger.error("Register error: %s", e)
+                    try:
+                        db().rollback()
+                    except Exception:
+                        pass
+                    estr = str(e).lower()
+                    if "unique" in estr or "duplicate" in estr or "integrity" in estr:
+                        err = "Email already registered."
+                    else:
+                        err = "Registration error. Please try again."
+                        app.logger.error("Register error: %s", e)
     return render(HERO + r"""
         <div class="card reveal" style="max-width:460px;margin:0 auto">
           <div class="sect"><h2>Create Account</h2></div>
@@ -796,7 +865,7 @@ def login():
         else:
             email = (request.form.get("email") or "").strip().lower()
             p = request.form.get("password") or ""
-            row = db().execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+            row = qexec("SELECT * FROM users WHERE email=?", (email,), fetchone=True)
             if row and check_password_hash(row["pw_hash"], p):
                 _login_attempts.pop(ip, None)
                 session.permanent = True
@@ -840,13 +909,12 @@ def forgot_password():
         if not email:
             err = "Enter your email address."
         else:
-            row = db().execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+            row = qexec("SELECT id FROM users WHERE email=?", (email,), fetchone=True)
             if row:
                 token = secrets.token_urlsafe(32)
-                d = db()
-                d.execute("INSERT INTO password_resets (user_id,token,created) VALUES (?,?,?)",
-                          (row["id"], token, datetime.datetime.now().isoformat(timespec="seconds")))
-                d.commit()
+                qexec("INSERT INTO password_resets (user_id,token,created) VALUES (?,?,?)",
+                      (row["id"], token, datetime.datetime.now().isoformat(timespec="seconds")))
+                db().commit()
                 reset_url = request.host_url.rstrip("/") + url_for("reset_password", token=token)
                 msg = f'Reset link: <a class="link" href="{reset_url}" style="word-break:break-all">{reset_url}</a>'
             else:
@@ -870,10 +938,10 @@ def forgot_password():
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
 def reset_password(token):
-    d = db()
-    reset = d.execute("""
-        SELECT pr.*, u.email FROM password_resets pr JOIN users u ON u.id=pr.user_id
-        WHERE pr.token=? AND pr.used=0""", (token,)).fetchone()
+    reset = qexec("""
+        SELECT pr.id, pr.user_id, pr.token, pr.created, pr.used, u.email
+        FROM password_resets pr JOIN users u ON u.id=pr.user_id
+        WHERE pr.token=? AND pr.used=0""", (token,), fetchone=True)
     if not reset:
         return render(HERO + """
             <div class="card reveal" style="max-width:460px;margin:0 auto">
@@ -902,10 +970,10 @@ def reset_password(token):
             if pw_errs:
                 err = "Password needs: " + ", ".join(pw_errs) + "."
             else:
-                d.execute("UPDATE users SET pw_hash=? WHERE id=?",
-                          (generate_password_hash(p), reset["user_id"]))
-                d.execute("UPDATE password_resets SET used=1 WHERE id=?", (reset["id"],))
-                d.commit()
+                qexec("UPDATE users SET pw_hash=? WHERE id=?",
+                      (generate_password_hash(p), reset["user_id"]))
+                qexec("UPDATE password_resets SET used=1 WHERE id=?", (reset["id"],))
+                db().commit()
                 return render(HERO + """
                     <div class="card reveal" style="max-width:460px;margin:0 auto">
                       <div class="sect"><h2>Password Reset</h2></div>
@@ -975,11 +1043,11 @@ def reset_password(token):
 @login_required
 def index():
     solved = my_solves()
-    players = db().execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
-    total_solves = db().execute("SELECT COUNT(*) c FROM solves").fetchone()["c"]
-    order = db().execute("""
+    players = qexec("SELECT COUNT(*) AS c FROM users", fetchone=True)["c"]
+    total_solves = qexec("SELECT COUNT(*) AS c FROM solves", fetchone=True)["c"]
+    order = qexec("""
         SELECT u.id FROM users u LEFT JOIN solves s ON s.user_id=u.id
-        GROUP BY u.id ORDER BY COALESCE(SUM(s.points),0) DESC, MAX(s.ts) ASC""").fetchall()
+        GROUP BY u.id ORDER BY COALESCE(SUM(s.points),0) DESC, MAX(s.ts) ASC""", fetchall=True)
     rank = next((i + 1 for i, r in enumerate(order) if r["id"] == session["uid"]), "-")
     pct = int(100 * len(solved) / len(CHALLENGES)) if CHALLENGES else 0
     return render("""
@@ -1030,10 +1098,10 @@ def challenge(cid):
     if not c:
         abort(404)
     solved = cid in my_solves()
-    solvers = db().execute("SELECT COUNT(*) c FROM solves WHERE challenge=?", (cid,)).fetchone()["c"]
-    first_solver = db().execute("""
+    solvers = qexec("SELECT COUNT(*) AS c FROM solves WHERE challenge=?", (cid,), fetchone=True)["c"]
+    first_solver = qexec("""
         SELECT u.display_name FROM solves s JOIN users u ON u.id=s.user_id
-        WHERE s.challenge=? ORDER BY s.ts ASC LIMIT 1""", (cid,)).fetchone()
+        WHERE s.challenge=? ORDER BY s.ts ASC LIMIT 1""", (cid,), fetchone=True)
     first_name = first_solver["display_name"] if first_solver else None
     return render("""
         <a href="{{ url_for('index') }}" class="muted" style="font-size:13px;display:inline-flex;align-items:center;gap:6px">
@@ -1172,23 +1240,22 @@ def submit():
         return jsonify(correct=False, message="Unknown challenge.")
     if (data.get("flag") or "").strip() != c["flag"]:
         return jsonify(correct=False, message="Incorrect flag. Try again.")
-    d = db()
-    if d.execute("SELECT 1 FROM solves WHERE user_id=? AND challenge=?",
-                 (session["uid"], c["id"])).fetchone():
+    if qexec("SELECT 1 FROM solves WHERE user_id=? AND challenge=?",
+              (session["uid"], c["id"]), fetchone=True):
         return jsonify(correct=True, message="Correct — already solved!")
-    d.execute("INSERT INTO solves (user_id,challenge,points,ts) VALUES (?,?,?,?)",
-              (session["uid"], c["id"], c["points"],
-               datetime.datetime.now().isoformat(timespec="seconds")))
-    d.commit()
+    qexec("INSERT INTO solves (user_id,challenge,points,ts) VALUES (?,?,?,?)",
+          (session["uid"], c["id"], c["points"],
+           datetime.datetime.now().isoformat(timespec="seconds")))
+    db().commit()
     return jsonify(correct=True, message=f"Correct! +{c['points']} points")
 
 
 @app.route("/leaderboard")
 def leaderboard():
-    rows = db().execute("""
+    rows = qexec("""
         SELECT u.display_name, COALESCE(SUM(s.points),0) AS score, MAX(s.ts) AS last_solve
         FROM users u LEFT JOIN solves s ON s.user_id=u.id
-        GROUP BY u.id ORDER BY score DESC, last_solve ASC""").fetchall()
+        GROUP BY u.id ORDER BY score DESC, last_solve ASC""", fetchall=True)
     top3 = [r for r in rows[:3] if r["score"] > 0]
     return render("""
         <div class="sect reveal"><h2>Leaderboard</h2></div>
