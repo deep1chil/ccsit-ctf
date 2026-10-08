@@ -177,6 +177,8 @@ def init_db():
     c.commit()
     c.close()
 
+init_db()
+
 
 def current_user():
     uid = session.get("uid")
