@@ -149,6 +149,8 @@ def db():
     if "db" not in g:
         g.db = sqlite3.connect(DB)
         g.db.row_factory = sqlite3.Row
+        g.db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, pw_hash TEXT NOT NULL, created TEXT NOT NULL)")
+        g.db.execute("CREATE TABLE IF NOT EXISTS solves (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, challenge TEXT NOT NULL, points INTEGER NOT NULL, ts TEXT NOT NULL, UNIQUE(user_id, challenge))")
     return g.db
 
 
@@ -157,6 +159,17 @@ def close_db(exc):
     d = g.pop("db", None)
     if d:
         d.close()
+
+
+@app.route("/health")
+def health():
+    try:
+        c = sqlite3.connect(DB)
+        c.execute("SELECT 1")
+        c.close()
+        return {"status": "ok", "db": DB, "render": bool(os.environ.get("RENDER"))}
+    except Exception as e:
+        return {"status": "error", "db": DB, "error": str(e)}, 500
 
 
 def init_db():
@@ -682,6 +695,7 @@ def register():
                 err = "Password needs: " + ", ".join(pw_errs) + "."
             else:
                 try:
+                    init_db()
                     d = db()
                     d.execute("INSERT INTO users (username,pw_hash,created) VALUES (?,?,?)",
                               (u, generate_password_hash(p),
@@ -692,6 +706,9 @@ def register():
                     return redirect(url_for("index"))
                 except sqlite3.IntegrityError:
                     err = "Username already taken."
+                except Exception as e:
+                    err = "Registration error. Please try again."
+                    app.logger.error("Register error: %s", e)
     return render(HERO + r"""
         <div class="card reveal" style="max-width:460px;margin:0 auto">
           <div class="sect"><h2>Create Account</h2></div>
