@@ -140,7 +140,7 @@ CHALLENGES = [
         "id": "log-analysis",
         "name": "Incident Investigator",
         "category": "Incident Response",
-        "difficulty": "Medium",
+        "difficulty": "Easy",
         "points": 200,
         "flag": "FLAG{1nc1d3nt_r3sp0ns3_l0g_4n4lys1s}",
         "port": 8005,
