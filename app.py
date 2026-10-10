@@ -161,6 +161,13 @@ def chal_url(c):
     return f"/lab/{c['id']}/"
 
 
+def chal_url_full(c, req):
+    url = os.environ.get(c["env"], "").strip()
+    if url:
+        return url
+    return req.host_url.rstrip("/") + f"/lab/{c['id']}/"
+
+
 import challenge_roleup as _roleup
 import challenge_corporateleak as _corpleak
 
@@ -177,7 +184,8 @@ def lab_roleup_flag():
 
 @app.route("/lab/corporateleak/")
 def lab_corpleak():
-    return render_template_string(_corpleak.PAGE)
+    page = _corpleak.PAGE.replace("var API='';", "var API='/lab/corporateleak';")
+    return render_template_string(page)
 
 
 @app.route("/lab/corporateleak/api/register", methods=["POST"])
@@ -1699,7 +1707,7 @@ def challenge(cid):
             }
           };
         </script>
-        """, c=c, cur=chal_url(c), solved=solved, solvers=solvers,
+        """, c=c, cur=chal_url_full(c, request), solved=solved, solvers=solvers,
         first_name=first_name,
         title=c["name"] + " — CCSIT CTF", nav="home")
 
