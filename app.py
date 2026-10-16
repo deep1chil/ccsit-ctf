@@ -1692,12 +1692,13 @@ def index():
           <div class="s"><span class="ico">🏆</span><div class="n" data-count="{{ solved|length }}/{{ nchal }}">0</div><div class="l">Solved</div></div>
           <div class="s"><span class="ico">👥</span><div class="n" data-count="{{ players }}">0</div><div class="l">Players</div></div>
         </div>
-        <div class="sect reveal"><h2>Challenges</h2></div>
+        {% for cat, cat_chals in grouped %}
+        <div class="sect reveal" style="margin-top:28px"><h2>{{ cat }}</h2></div>
         <div class="clist">
-          {% for c in chals %}
-          <a class="crow reveal" href="{{ url_for('challenge', cid=c['id']) }}" style="transition-delay:{{ loop.index0 * 80 }}ms">
+          {% for c in cat_chals %}
+          <a class="crow reveal" href="{{ url_for('challenge', cid=c['id']) }}">
             <div class="main">
-              <div class="cat">{{ c['category'] }}</div>
+              <div class="cat">{{ c['category'] }} · {{ c['difficulty'] }}</div>
               <h3>{{ c['name'] }}
                 {% if c['id'] in solved %}<span class="solved-badge">✓ Solved</span>{% endif %}
               </h3>
@@ -1710,7 +1711,9 @@ def index():
           </a>
           {% endfor %}
         </div>
+        {% endfor %}
         """, chals=CHALLENGES, solved=solved,
+        grouped=[(k, list(g)) for k, g in __import__('itertools').groupby(CHALLENGES, key=lambda c: c['category'])],
         nchal=len(CHALLENGES), players=players, rank=rank, pct=pct,
         title="Challenges — CCSIT CTF", nav="home")
 
