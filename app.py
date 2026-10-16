@@ -153,7 +153,7 @@ CHALLENGES = [
     {
         "id": "ssrf-scanner",
         "name": "Internal Scanner",
-        "category": "Cyberthon",
+        "category": "تحديات سايبر ثون",
         "difficulty": "Medium",
         "points": 250,
         "flag": "FLAG{ssrf_t0_1nt3rn4l_s3rv1c3}",
@@ -163,7 +163,7 @@ CHALLENGES = [
                  "give it — but the server behind it has internal services that "
                  "should never be reachable from the outside. Can you trick the "
                  "scanner into reading internal secrets?"),
-        "hint": "The server fetches the URL you provide. What if you point it at localhost or 127.0.0.1?",
+        "hint": "The server fetches the URL you provide. What if you point it at an internal address like 0.0.0.0?",
     },
 ]
 CH_BY_ID = {c["id"]: c for c in CHALLENGES}
@@ -613,9 +613,8 @@ import urllib.error
 _SSRF_FLAG = "FLAG{ssrf_t0_1nt3rn4l_s3rv1c3}"
 
 _SSRF_INTERNAL_PAGES = {
-    "/": "<h1>Internal Admin Panel</h1><p>Welcome, root. Services: <a href='/secrets'>/secrets</a>, <a href='/status'>/status</a></p>",
-    "/status": "<h1>Service Status</h1><pre>db: running\ncache: running\nqueue: running</pre>",
-    "/secrets": f"<h1>Internal Secrets Store</h1><pre>FLAG={_SSRF_FLAG}\nDB_PASS=pgS3cur3!2026\nAPI_KEY=sk-internal-9f8e7d6c</pre>",
+    "/": "404 Not Found — only /flag exists",
+    "/flag": f"FLAG={_SSRF_FLAG}",
 }
 
 _SSRF_PAGE = r"""
@@ -666,14 +665,14 @@ input:focus{border-color:var(--indigo);box-shadow:0 0 0 3px var(--indigo-glow)}
 </style></head><body>
 <div class="wrap">
   <div class="card">
-    <span class="badge">Cyberthon &middot; SSRF</span>
+    <span class="badge">سايبر ثون &middot; SSRF</span>
     <h1>ScanHub</h1>
     <p class="sub">Website Health Checker — enter any URL and we'll fetch it for you</p>
 
     <div class="info">
       <b>ℹ️ How it works:</b> Our server fetches the URL you provide and returns the response.
       Great for checking if a website is up!<br>
-      <code>Internal services run on port 5000 (localhost)</code> — but those are blocked from the outside... right?
+      <code>Some internal services are bound to 0.0.0.0</code> — but those shouldn't be reachable from the outside... right?
     </div>
 
     <label>URL to scan</label>
@@ -686,12 +685,12 @@ input:focus{border-color:var(--indigo);box-shadow:0 0 0 3px var(--indigo-glow)}
     </div>
 
     <div class="hint">
-      <b>💡 Hint:</b> The server fetches whatever URL you give it. Some internal services on
-      <code>http://127.0.0.1:PORT</code> have sensitive pages like <code>/secrets</code>...
+      <b>💡 Hint:</b> The server fetches whatever URL you give it. What happens if you
+      point it at an internal address like <code>http://0.0.0.0</code>?
     </div>
   </div>
 </div>
-<!-- Note to self: internal admin panel runs on http://127.0.0.1:9999 with /secrets endpoint -->
+<!-- Dev note: internal service at http://0.0.0.0 — do NOT expose /flag -->
 <script>
 const result=document.getElementById('result'),body=document.getElementById('body');
 async function scan(){
@@ -726,18 +725,18 @@ def lab_ssrf_scan():
     if not url:
         return jsonify(success=False, error="Please provide a URL."), 400
 
-    # Simulate SSRF: if the URL points to 127.0.0.1:9999 or localhost:9999,
-    # return "internal" pages instead of actually fetching
     import re as _re
     local_match = _re.match(
-        r'^https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0):9999(/.*)?$', url, _re.IGNORECASE
+        r'^https?://0\.0\.0\.0(?::\d+)?(/.*)?$', url, _re.IGNORECASE
     )
     if local_match:
         path = (local_match.group(1) or "/").rstrip("/") or "/"
         page = _SSRF_INTERNAL_PAGES.get(path)
         if page:
+            if path == "/":
+                return jsonify(success=True, status=404, body=page)
             return jsonify(success=True, status=200, body=page)
-        return jsonify(success=True, status=404, body="<h1>404 Not Found</h1>")
+        return jsonify(success=True, status=404, body="404 Not Found")
 
     # For real external URLs, actually try to fetch (safe for a CTF demo)
     try:
@@ -1767,7 +1766,7 @@ def challenge(cid):
             <li><div><b>Review the logs</b><span>Open the challenge and study the server logs timeline.</span></div></li>
             <li><div><b>Trace the attack</b><span>Follow the attacker's steps — how did they get in? What did they do?</span></div></li>
             <li><div><b>Decode the payload</b><span>Find and decode the attacker's hidden payload to extract the flag.</span></div></li>
-            {% elif c['category'] == 'Cyberthon' %}
+            {% elif c['category'] == 'تحديات سايبر ثون' %}
             <li><div><b>Explore the tool</b><span>Open the challenge and understand what the application does.</span></div></li>
             <li><div><b>Abuse the feature</b><span>Think about what happens server-side. Can you make it reach something it shouldn't?</span></div></li>
             <li><div><b>Read the secret</b><span>Find the internal service and extract the hidden flag.</span></div></li>
