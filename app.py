@@ -150,6 +150,21 @@ CHALLENGES = [
                  "action that reveals the flag."),
         "hint": "The attacker encoded their payload. Look for Base64 strings in the commands.",
     },
+    {
+        "id": "ssrf-scanner",
+        "name": "Internal Scanner",
+        "category": "Cyberthon",
+        "difficulty": "Medium",
+        "points": 250,
+        "flag": "FLAG{ssrf_t0_1nt3rn4l_s3rv1c3}",
+        "port": 8006,
+        "env": "SSRF_URL",
+        "desc": ("ScanHub is a website health-check tool. It fetches any URL you "
+                 "give it — but the server behind it has internal services that "
+                 "should never be reachable from the outside. Can you trick the "
+                 "scanner into reading internal secrets?"),
+        "hint": "The server fetches the URL you provide. What if you point it at localhost or 127.0.0.1?",
+    },
 ]
 CH_BY_ID = {c["id"]: c for c in CHALLENGES}
 
@@ -589,6 +604,156 @@ def lab_ir_check():
     if answer == _IR_FLAG:
         return jsonify(correct=True, flag=_IR_FLAG)
     return jsonify(correct=False, error="Wrong answer. Decode the attacker's command!"), 400
+
+
+# ----------- Cyberthon: Internal Scanner / SSRF (in-process) -----------
+import urllib.request
+import urllib.error
+
+_SSRF_FLAG = "FLAG{ssrf_t0_1nt3rn4l_s3rv1c3}"
+
+_SSRF_INTERNAL_PAGES = {
+    "/": "<h1>Internal Admin Panel</h1><p>Welcome, root. Services: <a href='/secrets'>/secrets</a>, <a href='/status'>/status</a></p>",
+    "/status": "<h1>Service Status</h1><pre>db: running\ncache: running\nqueue: running</pre>",
+    "/secrets": f"<h1>Internal Secrets Store</h1><pre>FLAG={_SSRF_FLAG}\nDB_PASS=pgS3cur3!2026\nAPI_KEY=sk-internal-9f8e7d6c</pre>",
+}
+
+_SSRF_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ScanHub — Website Health Check</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0a1a;--surface:rgba(20,20,40,.9);--border:rgba(99,102,241,.18);
+  --border-h:rgba(99,102,241,.4);--text:#e2e8f0;--text2:#64748b;
+  --indigo:#6366f1;--indigo2:#4f46e5;--indigo-glow:rgba(99,102,241,.12);
+  --green:#22c55e;--red:#ef4444;--amber:#f59e0b;
+  --font:'Inter',system-ui,sans-serif;--mono:'JetBrains Mono',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -10%,rgba(99,102,241,.06),transparent 70%)}
+.wrap{max-width:640px;margin:0 auto;padding:50px 20px 60px;position:relative;z-index:1}
+.card{background:var(--surface);backdrop-filter:blur(12px);border:1px solid var(--border);
+  border-radius:16px;padding:32px;margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--indigo);padding:4px 12px;
+  border:1px solid rgba(99,102,241,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:28px;font-weight:900;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input{width:100%;padding:12px 14px;margin-bottom:16px;
+  background:rgba(0,0,0,.4);border:1px solid var(--border);border-radius:10px;
+  color:var(--text);font:15px var(--font);outline:none}
+input:focus{border-color:var(--indigo);box-shadow:0 0 0 3px var(--indigo-glow)}
+.btn{display:inline-block;padding:13px 28px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--indigo2),var(--indigo));
+  color:#fff;font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(99,102,241,.3)}
+#result{margin-top:20px;display:none}
+#result .header{font:600 13px var(--mono);color:var(--indigo);margin-bottom:8px}
+#result pre{background:rgba(0,0,0,.5);border:1px solid var(--border);border-radius:10px;
+  padding:16px;font:13px/1.7 var(--mono);color:var(--text);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto}
+.status-ok{color:var(--green);font-weight:700}
+.status-err{color:var(--red);font-weight:700}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+.info{background:rgba(99,102,241,.06);border:1px solid rgba(99,102,241,.15);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--text2)}
+.info code{color:var(--indigo);font-family:var(--mono)}
+</style></head><body>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">Cyberthon &middot; SSRF</span>
+    <h1>ScanHub</h1>
+    <p class="sub">Website Health Checker — enter any URL and we'll fetch it for you</p>
+
+    <div class="info">
+      <b>ℹ️ How it works:</b> Our server fetches the URL you provide and returns the response.
+      Great for checking if a website is up!<br>
+      <code>Internal services run on port 5000 (localhost)</code> — but those are blocked from the outside... right?
+    </div>
+
+    <label>URL to scan</label>
+    <input id="url" placeholder="https://example.com" autocomplete="off" value="https://example.com">
+    <button class="btn" onclick="scan()">Scan URL</button>
+
+    <div id="result">
+      <div class="header">Response:</div>
+      <pre id="body"></pre>
+    </div>
+
+    <div class="hint">
+      <b>💡 Hint:</b> The server fetches whatever URL you give it. Some internal services on
+      <code>http://127.0.0.1:PORT</code> have sensitive pages like <code>/secrets</code>...
+    </div>
+  </div>
+</div>
+<!-- Note to self: internal admin panel runs on http://127.0.0.1:9999 with /secrets endpoint -->
+<script>
+const result=document.getElementById('result'),body=document.getElementById('body');
+async function scan(){
+  const url=document.getElementById('url').value.trim();
+  if(!url){alert('Enter a URL');return}
+  result.style.display='none';body.textContent='';
+  body.textContent='Scanning...';result.style.display='block';
+  try{
+    const r=await fetch('/lab/ssrf-scanner/scan',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({url:url})});
+    const d=await r.json();
+    if(d.success){
+      body.innerHTML='<span class="status-ok">✔ Status: '+d.status+'</span>\n\n'+escHtml(d.body);
+    } else {
+      body.innerHTML='<span class="status-err">✘ Error</span>\n\n'+escHtml(d.error);
+    }
+  }catch(e){body.textContent='Network error: '+e.message}
+}
+function escHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/ssrf-scanner/")
+def lab_ssrf():
+    return render_template_string(_SSRF_PAGE)
+
+@app.route("/lab/ssrf-scanner/scan", methods=["POST"])
+def lab_ssrf_scan():
+    data = request.get_json(silent=True) or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify(success=False, error="Please provide a URL."), 400
+
+    # Simulate SSRF: if the URL points to 127.0.0.1:9999 or localhost:9999,
+    # return "internal" pages instead of actually fetching
+    import re as _re
+    local_match = _re.match(
+        r'^https?://(?:127\.0\.0\.1|localhost|0\.0\.0\.0):9999(/.*)?$', url, _re.IGNORECASE
+    )
+    if local_match:
+        path = (local_match.group(1) or "/").rstrip("/") or "/"
+        page = _SSRF_INTERNAL_PAGES.get(path)
+        if page:
+            return jsonify(success=True, status=200, body=page)
+        return jsonify(success=True, status=404, body="<h1>404 Not Found</h1>")
+
+    # For real external URLs, actually try to fetch (safe for a CTF demo)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "ScanHub/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            body = resp.read(4096).decode("utf-8", errors="replace")
+            return jsonify(success=True, status=resp.status, body=body)
+    except urllib.error.HTTPError as e:
+        return jsonify(success=True, status=e.code, body=e.read(2048).decode("utf-8", errors="replace"))
+    except Exception as e:
+        return jsonify(success=False, error=str(e))
+
+# Simulated internal service endpoint (accessible only via SSRF)
+@app.route("/lab/ssrf-scanner/internal/<path:p>")
+def lab_ssrf_internal(p):
+    abort(403)
 
 
 class PgRowWrapper:
@@ -1602,6 +1767,10 @@ def challenge(cid):
             <li><div><b>Review the logs</b><span>Open the challenge and study the server logs timeline.</span></div></li>
             <li><div><b>Trace the attack</b><span>Follow the attacker's steps — how did they get in? What did they do?</span></div></li>
             <li><div><b>Decode the payload</b><span>Find and decode the attacker's hidden payload to extract the flag.</span></div></li>
+            {% elif c['category'] == 'Cyberthon' %}
+            <li><div><b>Explore the tool</b><span>Open the challenge and understand what the application does.</span></div></li>
+            <li><div><b>Abuse the feature</b><span>Think about what happens server-side. Can you make it reach something it shouldn't?</span></div></li>
+            <li><div><b>Read the secret</b><span>Find the internal service and extract the hidden flag.</span></div></li>
             {% else %}
             <li><div><b>Open the target</b><span>The challenge runs on its own server. Click the link below to open it.</span></div></li>
             <li><div><b>Find the vulnerability</b><span>Proxy your browser through Burp Suite and analyze what the page sends.</span></div></li>
