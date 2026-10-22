@@ -1248,11 +1248,13 @@ def admin_add_solve():
     ch = CH_BY_ID.get(cid)
     if not ch:
         return jsonify(error=f"Challenge {cid} not found"), 404
+    pts = request.json.get("points", ch["points"])
+    ts = request.json.get("ts", datetime.datetime.now().isoformat(timespec="seconds"))
     try:
         qexec("INSERT INTO solves (user_id,challenge,points,ts) VALUES (?,?,?,?)",
-              (row["id"], cid, ch["points"], datetime.datetime.now().isoformat(timespec="seconds")))
+              (row["id"], cid, pts, ts))
         db().commit()
-        return jsonify(ok=True, user=email, challenge=cid, points=ch["points"])
+        return jsonify(ok=True, user=email, challenge=cid, points=pts)
     except Exception:
         return jsonify(error="Already solved or DB error"), 400
 
