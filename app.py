@@ -1502,6 +1502,8 @@ def lab_api_me():
     if not user:
         return jsonify(error="Unauthorized. Provide Bearer token."), 401
     info = {"user": user["user"], "role": user["role"]}
+    if user["role"] == "viewer":
+        info["note"] = "Viewer access is limited. Other accounts: developer, sysadmin"
     if user["role"] == "developer":
         info["debug"] = True
         info["internal_note"] = "Dev access granted. Debug endpoints available at /api/v2/debug/*"
@@ -1513,6 +1515,7 @@ def lab_api_vault_public():
         {"id": 1, "name": "Company WiFi", "value": "WPA2: DataVault2026!"},
         {"id": 2, "name": "Guest Portal", "value": "https://portal.datavault.local"},
         {"id": 3, "name": "API Docs (internal)", "value": "See /api/v2/docs — requires developer role"},
+        {"id": 4, "name": "Dev Team Onboarding", "value": "Default password format: <role><year>! — Change after first login!"},
     ])
 
 @app.route("/lab/api-hunt/api/v2/vault/secret", methods=["GET"])
