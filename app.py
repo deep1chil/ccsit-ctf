@@ -1227,9 +1227,41 @@ def admin_delete_user():
 def admin_clear_solves():
     if not ADMIN_KEY or request.headers.get("X-Admin-Key") != ADMIN_KEY:
         abort(403)
-    qexec("DELETE FROM solves", ())
+    challenges = request.json.get("challenges") if request.json else None
+    if challenges:
+        for cid in challenges:
+            qexec("DELETE FROM solves WHERE challenge=?", (cid,))
+    else:
+        qexec("DELETE FROM solves", ())
     db().commit()
-    return jsonify(ok=True, msg="All solves cleared")
+    return jsonify(ok=True, msg="Solves cleared", challenges=challenges or "all")
+
+@app.route("/admin/add-solve", methods=["POST"])
+def admin_add_solve():
+    if not ADMIN_KEY or request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        abort(403)
+    email = (request.json.get("email") or "").strip().lower()
+    cid = request.json.get("challenge", "")
+    row = qexec("SELECT id FROM users WHERE email=?", (email,), fetchone=True)
+    if not row:
+        return jsonify(error=f"User {email} not found"), 404
+    ch = CH_BY_ID.get(cid)
+    if not ch:
+        return jsonify(error=f"Challenge {cid} not found"), 404
+    try:
+        qexec("INSERT INTO solves (user_id,challenge,points,ts) VALUES (?,?,?,?)",
+              (row["id"], cid, ch["points"], datetime.datetime.now().isoformat(timespec="seconds")))
+        db().commit()
+        return jsonify(ok=True, user=email, challenge=cid, points=ch["points"])
+    except Exception:
+        return jsonify(error="Already solved or DB error"), 400
+
+@app.route("/admin/list-users", methods=["GET"])
+def admin_list_users():
+    if not ADMIN_KEY or request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        abort(403)
+    rows = qexec("SELECT id, email, display_name FROM users", fetchall=True)
+    return jsonify(users=[{"id": r["id"], "email": r["email"], "name": r["display_name"]} for r in rows])
 
 
 def init_db():
