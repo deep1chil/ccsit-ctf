@@ -207,6 +207,35 @@ CHALLENGES = [
                  "note. Can you read it?"),
         "hint": "Look at the note ID in the URL or request. What happens if you change it?",
     },
+    {
+        "id": "lfi-reader",
+        "name": "File Reader",
+        "category": "تحديات سايبر ثون",
+        "difficulty": "Hard",
+        "points": 350,
+        "flag": "FLAG{l0c4l_f1l3_1nclus10n_pwn3d}",
+        "port": 8010,
+        "env": "LFI_URL",
+        "desc": ("SecureDocs is a document viewer that loads files by name. "
+                 "The developer added filters to block path traversal — but "
+                 "did they think of every bypass? Read /etc/flag.txt to win."),
+        "hint": "The filter blocks ../ but what about double encoding, null bytes, or other tricks?",
+    },
+    {
+        "id": "api-hunt",
+        "name": "Ghost API",
+        "category": "تحديات سايبر ثون",
+        "difficulty": "Hard",
+        "points": 350,
+        "flag": "FLAG{4p1_ch41n_m4st3r_h4ck3r}",
+        "port": 8011,
+        "env": "API_URL",
+        "desc": ("DataVault Corp exposed a REST API but claims it's fully secured. "
+                 "There are no docs, no hints, and no hand-holding. Discover the "
+                 "hidden endpoints, break the auth, escalate your privileges, and "
+                 "chain it all together to extract the flag. Good luck."),
+        "hint": "Start by exploring. Try common API paths like /api, /docs, /swagger, /v1, /v2...",
+    },
 ]
 CH_BY_ID = {c["id"]: c for c in CHALLENGES}
 
@@ -1145,6 +1174,427 @@ def lab_idor_note(nid):
     if not note:
         return jsonify(error="Note not found."), 404
     return jsonify(id=nid, title=note["title"], owner=note["owner"], content=note["content"])
+
+
+# ----------- Cyberthon: File Reader / LFI Hard (in-process) -----------
+
+_LFI_FLAG = "FLAG{l0c4l_f1l3_1nclus10n_pwn3d}"
+
+_LFI_FILES = {
+    "/var/www/docs/welcome.txt": "Welcome to SecureDocs!\nThis is a secure document viewer.\nOnly files in /var/www/docs/ are allowed.",
+    "/var/www/docs/readme.txt": "SecureDocs v3.2\nBuilt with Python/Flask\nSecurity: path traversal filter active\nNote: filter strips ../ sequences",
+    "/var/www/docs/changelog.txt": "v3.2 - Added ../ filter\nv3.1 - Fixed null byte bug (or did we?)\nv3.0 - Added URL decoding support\nv2.0 - Basic file viewer\nv1.0 - Initial release",
+    "/var/www/docs/config.txt": "# Server Config\nDOC_ROOT=/var/www/docs\nFILTER=strip_dotdot\nDECODE=url_decode_once\n# TODO: double encoding still bypasses? check later",
+    "/etc/passwd": "root:x:0:0:root:/root:/bin/bash\nwww-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\nctf:x:1000:1000::/home/ctf:/bin/bash",
+    "/etc/flag.txt": _LFI_FLAG,
+    "/etc/shadow": "[PERMISSION DENIED] Nice try. Only root can read this.",
+    "/proc/self/environ": "PATH=/usr/local/bin:/usr/bin\nHOME=/var/www\nFLAG_LOCATION=/etc/flag.txt\nSECRET_KEY=s3cur3d0cs_k3y_2026",
+}
+
+_LFI_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SecureDocs — Document Viewer</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0a12;--surface:rgba(18,18,30,.95);--border:rgba(234,179,8,.15);
+  --text:#e2e8f0;--text2:#64748b;--yellow:#eab308;--yellow2:#ca8a04;
+  --green:#22c55e;--red:#ef4444;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -10%,rgba(234,179,8,.04),transparent 70%)}
+.wrap{max-width:680px;margin:0 auto;padding:50px 20px 60px;position:relative;z-index:1}
+.card{background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:32px;margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--yellow);padding:4px 12px;
+  border:1px solid rgba(234,179,8,.3);border-radius:6px;margin-bottom:16px}
+h1{font-size:28px;font-weight:900;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input{width:100%;padding:12px 14px;margin-bottom:16px;background:rgba(0,0,0,.5);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:14px var(--mono);outline:none}
+input:focus{border-color:var(--yellow);box-shadow:0 0 0 3px rgba(234,179,8,.1)}
+.btn{display:inline-block;padding:13px 28px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--yellow2),var(--yellow));
+  color:#000;font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(234,179,8,.3)}
+#out{margin-top:16px;display:none;background:#000;border:1px solid #222;border-radius:10px;
+  padding:16px;font:13px/1.7 var(--mono);color:var(--text);white-space:pre-wrap;
+  word-break:break-all;max-height:400px;overflow-y:auto}
+.files{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.file{background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.15);border-radius:8px;
+  padding:8px 14px;font:13px var(--mono);color:var(--yellow);cursor:pointer;transition:all .2s}
+.file:hover{background:rgba(234,179,8,.12);transform:translateY(-2px)}
+.warn{background:rgba(239,68,68,.06);border:1px solid rgba(239,68,68,.2);border-radius:10px;
+  padding:14px 18px;margin:20px 0;font-size:13px;color:var(--text2)}
+.warn b{color:var(--red)}
+.info{background:rgba(234,179,8,.06);border:1px solid rgba(234,179,8,.15);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--text2)}
+.info code{color:var(--yellow);font-family:var(--mono)}
+</style></head><body>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">سايبر ثون · LFI (Hard)</span>
+    <h1>SecureDocs</h1>
+    <p class="sub">Secure Document Viewer v3.2 — view authorized documents only</p>
+
+    <div class="info">
+      <b>📂 Available documents:</b> Click a file or type a filename to view it.
+    </div>
+
+    <div class="files">
+      <div class="file" onclick="load('welcome.txt')">welcome.txt</div>
+      <div class="file" onclick="load('readme.txt')">readme.txt</div>
+      <div class="file" onclick="load('changelog.txt')">changelog.txt</div>
+      <div class="file" onclick="load('config.txt')">config.txt</div>
+    </div>
+
+    <label>File path</label>
+    <input id="path" placeholder="welcome.txt" autocomplete="off" value="welcome.txt">
+    <button class="btn" onclick="fetch_file()">View File</button>
+
+    <div id="out"></div>
+
+    <div class="warn">
+      <b>⚠️ Security Notice:</b> Path traversal protection is active.
+      Sequences like <code>../</code> are filtered. Only files in <code>/var/www/docs/</code> are accessible.
+      <br><br>The flag is in <code>/etc/flag.txt</code> — but you can't reach it... or can you?
+    </div>
+  </div>
+</div>
+<!-- Security filter: strips ../ then prepends /var/www/docs/ -->
+<!-- v3.1 changelog: "fixed null byte bug (or did we?)" -->
+<!-- v3.0: added URL decoding support - decode happens BEFORE filter -->
+<script>
+const out=document.getElementById('out');
+function load(f){document.getElementById('path').value=f;fetch_file()}
+async function fetch_file(){
+  const p=document.getElementById('path').value.trim();
+  if(!p)return;
+  out.style.display='none';
+  const r=await fetch('/lab/lfi-reader/view?file='+encodeURIComponent(p));
+  const d=await r.json();
+  out.style.display='block';
+  if(d.content!==undefined){out.textContent='[200 OK] File: '+d.path+'\n\n'+d.content}
+  else{out.textContent='['+r.status+'] '+d.error}
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/lfi-reader/")
+def lab_lfi():
+    return render_template_string(_LFI_PAGE)
+
+@app.route("/lab/lfi-reader/view")
+def lab_lfi_view():
+    from urllib.parse import unquote
+    raw = request.args.get("file", "")
+    if not raw:
+        return jsonify(error="No file specified."), 400
+
+    # Step 1: URL-decode once (the "v3.0 feature")
+    decoded = unquote(raw)
+
+    # Step 2: Strip ../ sequences (the "v3.2 security filter")
+    filtered = decoded.replace("../", "")
+
+    # Step 3: Prepend doc root
+    full_path = "/var/www/docs/" + filtered
+
+    # Normalize (collapse //  etc)
+    import posixpath
+    full_path = posixpath.normpath(full_path)
+
+    # Check if file exists in our simulated filesystem
+    content = _LFI_FILES.get(full_path)
+    if content is not None:
+        return jsonify(path=full_path, content=content)
+
+    return jsonify(error=f"File not found: {full_path}"), 404
+
+
+# ----------- Cyberthon: Ghost API / Hard API Challenge (in-process) -----------
+
+_API_FLAG = "FLAG{4p1_ch41n_m4st3r_h4ck3r}"
+
+_API_USERS = {
+    "guest": {"password": "guest", "role": "viewer", "token": "tok_guest_a1b2c3"},
+    "developer": {"password": "dev2026!", "role": "developer", "token": "tok_dev_x7y8z9"},
+    "sysadmin": {"password": "r00tP@ss!", "role": "admin", "token": "tok_admin_REDACTED"},
+}
+
+_API_TOKENS = {u["token"]: {"user": k, "role": u["role"]} for k, u in _API_USERS.items() if u["token"] != "tok_admin_REDACTED"}
+_API_TOKENS["tok_admin_s3cr3t_k3y"] = {"user": "sysadmin", "role": "admin"}
+
+_API_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DataVault Corp — API Gateway</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#09090b;--surface:rgba(20,20,25,.95);--border:rgba(220,38,38,.15);
+  --text:#e2e8f0;--text2:#64748b;--red:#dc2626;--red2:#b91c1c;
+  --green:#22c55e;--amber:#f59e0b;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -10%,rgba(220,38,38,.04),transparent 70%)}
+.wrap{max-width:700px;margin:0 auto;padding:50px 20px 60px;position:relative;z-index:1}
+.card{background:var(--surface);border:1px solid var(--border);
+  border-radius:16px;padding:32px;margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--red);padding:4px 12px;
+  border:1px solid rgba(220,38,38,.3);border-radius:6px;margin-bottom:16px}
+h1{font-size:28px;font-weight:900;margin-bottom:4px}
+h2{font-size:18px;font-weight:800;color:var(--red);margin:20px 0 12px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+.terminal{background:#000;border:1px solid #222;border-radius:10px;padding:20px;
+  font:13px/1.8 var(--mono);color:#0f0;margin:16px 0;overflow-x:auto;white-space:pre}
+.terminal .prompt{color:var(--red)}
+.terminal .comment{color:#555}
+.terminal .response{color:var(--amber)}
+.terminal .flag-text{color:var(--green);font-weight:700}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input,select{width:100%;padding:12px 14px;margin-bottom:12px;background:rgba(0,0,0,.5);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:14px var(--mono);outline:none}
+input:focus,select:focus{border-color:var(--red);box-shadow:0 0 0 3px rgba(220,38,38,.1)}
+textarea{width:100%;padding:12px 14px;margin-bottom:12px;background:rgba(0,0,0,.5);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:13px var(--mono);
+  outline:none;resize:vertical;min-height:60px}
+.btn{display:inline-block;padding:12px 24px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--red2),var(--red));
+  color:#fff;font:700 14px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(220,38,38,.3)}
+.row{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
+.row>*{flex:1;min-width:200px}
+#out{margin-top:16px;background:#000;border:1px solid #222;border-radius:10px;padding:16px;
+  font:13px/1.7 var(--mono);color:var(--text);overflow-x:auto;white-space:pre-wrap;
+  word-break:break-all;max-height:400px;overflow-y:auto;display:none}
+.warn{background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.2);border-radius:10px;
+  padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--text2)}
+.warn b{color:var(--red)}
+.steps{color:var(--text2);font-size:13px;margin-top:16px;line-height:2}
+.steps code{color:var(--red);font-family:var(--mono);font-size:12px;background:rgba(220,38,38,.08);padding:2px 6px;border-radius:4px}
+</style></head><body>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">سايبر ثون · Hard API</span>
+    <h1>DataVault Corp</h1>
+    <p class="sub">API Gateway v2.1 — Authorized Personnel Only</p>
+
+    <div class="warn">
+      <b>⚠️ WARNING:</b> This API is protected. No documentation is provided.
+      Unauthorized access attempts are logged and monitored.
+    </div>
+
+    <div class="terminal"><span class="comment"># The API is live. No docs. No map. Find your way in.</span>
+<span class="comment"># Base URL: /lab/api-hunt/api</span>
+<span class="comment"># Start exploring...</span>
+<span class="prompt">$</span> curl /lab/api-hunt/api
+<span class="response">{"error":"Not found. Try harder."}</span>
+<span class="prompt">$</span> <span style="animation:blink 1s infinite">_</span></div>
+
+    <h2>API Console</h2>
+    <div class="row">
+      <div>
+        <label>Method</label>
+        <select id="method">
+          <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>
+        </select>
+      </div>
+      <div style="flex:2">
+        <label>Endpoint</label>
+        <input id="path" placeholder="/lab/api-hunt/api/..." value="/lab/api-hunt/api">
+      </div>
+    </div>
+    <label>Headers (JSON)</label>
+    <textarea id="headers" placeholder='{"Authorization": "Bearer tok_xxx"}'>{}</textarea>
+    <label>Body (JSON, for POST/PUT)</label>
+    <textarea id="body" placeholder='{"username": "...", "password": "..."}'></textarea>
+    <button class="btn" onclick="send()">Send Request</button>
+    <div id="out"></div>
+
+    <div class="steps">
+      <b>🔍 This is a multi-step challenge. You need to:</b><br>
+      1. Discover hidden API endpoints (try common paths)<br>
+      2. Find a way to authenticate<br>
+      3. Explore what authenticated endpoints reveal<br>
+      4. Escalate your privileges<br>
+      5. Access the admin-only secret endpoint<br><br>
+      <b>No more hints. This is Hard mode.</b>
+    </div>
+  </div>
+</div>
+<style>@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}</style>
+<script>
+const out=document.getElementById('out');
+async function send(){
+  const method=document.getElementById('method').value;
+  const path=document.getElementById('path').value.trim();
+  const headersRaw=document.getElementById('headers').value.trim();
+  const bodyRaw=document.getElementById('body').value.trim();
+  if(!path)return;
+  out.style.display='none';
+  let headers={'Content-Type':'application/json'};
+  try{if(headersRaw)Object.assign(headers,JSON.parse(headersRaw))}catch(e){out.style.display='block';out.textContent='Invalid headers JSON: '+e.message;return}
+  let opts={method:method,headers:headers};
+  if((method==='POST'||method==='PUT')&&bodyRaw)opts.body=bodyRaw;
+  try{
+    const r=await fetch(path,opts);
+    const text=await r.text();
+    let display=r.status+' '+r.statusText+'\n\n';
+    try{display+=JSON.stringify(JSON.parse(text),null,2)}catch(e){display+=text}
+    out.style.display='block';out.textContent=display;
+  }catch(e){out.style.display='block';out.textContent='Error: '+e.message}
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/api-hunt/")
+def lab_api():
+    return render_template_string(_API_PAGE)
+
+# --- Ghost API endpoints ---
+
+def _api_auth():
+    """Check Bearer token, return user info or None."""
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[7:].strip()
+        return _API_TOKENS.get(token)
+    return None
+
+@app.route("/lab/api-hunt/api", methods=["GET"])
+def lab_api_root():
+    return jsonify(error="Not found. Try harder."), 404
+
+@app.route("/lab/api-hunt/api/v1", methods=["GET"])
+def lab_api_v1():
+    return jsonify(error="v1 is deprecated. Try v2."), 404
+
+@app.route("/lab/api-hunt/api/v2", methods=["GET"])
+def lab_api_v2():
+    return jsonify(api="DataVault API v2", status="online",
+                   endpoints=["POST /auth/login", "GET /users/me", "GET /vault/public"],
+                   note="Some endpoints require authentication. Admin endpoints are not listed.")
+
+@app.route("/lab/api-hunt/api/v2/auth/login", methods=["POST"])
+def lab_api_login():
+    data = request.get_json(silent=True) or {}
+    username = data.get("username", "")
+    password = data.get("password", "")
+    user = _API_USERS.get(username)
+    if not user or user["password"] != password:
+        return jsonify(error="Invalid credentials.",
+                       hint="Default test account: guest/guest"), 401
+    if username == "sysadmin":
+        return jsonify(error="Admin login disabled via API. Use internal auth only."), 403
+    return jsonify(token=user["token"], role=user["role"], user=username,
+                   message="Login successful. Use Bearer token for authenticated requests.")
+
+@app.route("/lab/api-hunt/api/v2/users/me", methods=["GET"])
+def lab_api_me():
+    user = _api_auth()
+    if not user:
+        return jsonify(error="Unauthorized. Provide Bearer token."), 401
+    info = {"user": user["user"], "role": user["role"]}
+    if user["role"] == "developer":
+        info["debug"] = True
+        info["internal_note"] = "Dev access granted. Debug endpoints available at /api/v2/debug/*"
+    return jsonify(**info)
+
+@app.route("/lab/api-hunt/api/v2/vault/public", methods=["GET"])
+def lab_api_vault_public():
+    return jsonify(data=[
+        {"id": 1, "name": "Company WiFi", "value": "WPA2: DataVault2026!"},
+        {"id": 2, "name": "Guest Portal", "value": "https://portal.datavault.local"},
+        {"id": 3, "name": "API Docs (internal)", "value": "See /api/v2/docs — requires developer role"},
+    ])
+
+@app.route("/lab/api-hunt/api/v2/vault/secret", methods=["GET"])
+def lab_api_vault_secret():
+    user = _api_auth()
+    if not user:
+        return jsonify(error="Unauthorized."), 401
+    if user["role"] != "admin":
+        return jsonify(error="Forbidden. Admin role required.",
+                       your_role=user["role"]), 403
+    return jsonify(flag=_API_FLAG, message="Congratulations! You've breached DataVault Corp.")
+
+@app.route("/lab/api-hunt/api/v2/docs", methods=["GET"])
+def lab_api_docs():
+    user = _api_auth()
+    if not user:
+        return jsonify(error="Unauthorized."), 401
+    if user["role"] not in ("developer", "admin"):
+        return jsonify(error="Docs require developer or admin role."), 403
+    return jsonify(api_docs={
+        "public": [
+            "POST /api/v2/auth/login — body: {username, password}",
+            "GET  /api/v2/users/me — returns your profile",
+            "GET  /api/v2/vault/public — public secrets",
+        ],
+        "authenticated": [
+            "GET  /api/v2/docs — this page (developer+)",
+            "GET  /api/v2/vault/secret — THE FLAG (admin only)",
+            "GET  /api/v2/debug/tokens — active tokens (developer+)",
+            "POST /api/v2/debug/promote — elevate role (developer+, needs admin_code)",
+        ],
+        "admin_note": "Promotion requires the admin_code from the tokens list."
+    })
+
+@app.route("/lab/api-hunt/api/v2/debug/tokens", methods=["GET"])
+def lab_api_debug_tokens():
+    user = _api_auth()
+    if not user:
+        return jsonify(error="Unauthorized."), 401
+    if user["role"] not in ("developer", "admin"):
+        return jsonify(error="Debug access requires developer role."), 403
+    return jsonify(active_tokens=[
+        {"user": "guest", "token": "tok_guest_a1b2c3", "role": "viewer"},
+        {"user": "developer", "token": "tok_dev_x7y8z9", "role": "developer"},
+        {"user": "sysadmin", "token": "[REDACTED]", "role": "admin",
+         "admin_code": "VAULT-OVERRIDE-7391"},
+    ])
+
+@app.route("/lab/api-hunt/api/v2/debug/promote", methods=["POST"])
+def lab_api_debug_promote():
+    user = _api_auth()
+    if not user:
+        return jsonify(error="Unauthorized."), 401
+    if user["role"] not in ("developer", "admin"):
+        return jsonify(error="Requires developer role."), 403
+    data = request.get_json(silent=True) or {}
+    code = data.get("admin_code", "")
+    if code != "VAULT-OVERRIDE-7391":
+        return jsonify(error="Invalid admin_code.",
+                       hint="Check the tokens debug endpoint."), 403
+    new_token = "tok_promoted_adm1n_9k2m"
+    _API_TOKENS[new_token] = {"user": user["user"], "role": "admin"}
+    return jsonify(message="Role elevated to admin!",
+                   new_token=new_token, role="admin",
+                   next="Use this token to access /api/v2/vault/secret")
+
+# Common wrong guesses return helpful 404s
+@app.route("/lab/api-hunt/api/v2/admin", methods=["GET"])
+def lab_api_admin_redirect():
+    return jsonify(error="No /admin endpoint. Read the docs."), 404
+
+@app.route("/lab/api-hunt/api/docs", methods=["GET"])
+def lab_api_docs_wrong():
+    return jsonify(error="Docs moved to /api/v2/docs. Requires auth."), 404
+
+@app.route("/lab/api-hunt/api/swagger", methods=["GET"])
+def lab_api_swagger():
+    return jsonify(error="No Swagger. This isn't that kind of API."), 404
+
+@app.route("/lab/api-hunt/api/v2/auth/register", methods=["POST"])
+def lab_api_register():
+    return jsonify(error="Registration disabled. Use existing accounts."), 403
 
 
 class PgRowWrapper:
