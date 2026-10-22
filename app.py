@@ -165,6 +165,48 @@ CHALLENGES = [
                  "scanner into reading internal secrets?"),
         "hint": "The server fetches the URL you provide. What if you point it at an internal address like 0.0.0.0?",
     },
+    {
+        "id": "jwt-forge",
+        "name": "Token Forge",
+        "category": "تحديات سايبر ثون",
+        "difficulty": "Medium",
+        "points": 200,
+        "flag": "FLAG{jwt_w34k_s3cr3t_cr4ck3d}",
+        "port": 8007,
+        "env": "JWT_URL",
+        "desc": ("SecureVault uses JWT tokens for authentication. You're logged in "
+                 "as a guest — but only admins can see the flag. Can you crack the "
+                 "token's secret and forge an admin token?"),
+        "hint": "Decode the JWT on jwt.io. The secret is a common weak password. Try cracking it.",
+    },
+    {
+        "id": "cmd-inject",
+        "name": "Ping Master",
+        "category": "تحديات سايبر ثون",
+        "difficulty": "Easy",
+        "points": 150,
+        "flag": "FLAG{c0mm4nd_1nj3ct10n_p1ng}",
+        "port": 8008,
+        "env": "CMD_URL",
+        "desc": ("PingMaster is a network diagnostic tool. Enter an IP address and "
+                 "the server will ping it for you. But what if the server doesn't "
+                 "properly sanitize your input?"),
+        "hint": "The server runs your input in a shell command. Try adding ; or | after the IP address.",
+    },
+    {
+        "id": "idor-notes",
+        "name": "Private Notes",
+        "category": "تحديات سايبر ثون",
+        "difficulty": "Easy",
+        "points": 150,
+        "flag": "FLAG{1d0r_n0t3_4cc3ss}",
+        "port": 8009,
+        "env": "IDOR_URL",
+        "desc": ("NoteKeeper lets users store private notes. You're logged in as "
+                 "user 2 with your own notes — but the admin (user 1) has a secret "
+                 "note. Can you read it?"),
+        "hint": "Look at the note ID in the URL or request. What happens if you change it?",
+    },
 ]
 CH_BY_ID = {c["id"]: c for c in CHALLENGES}
 
@@ -753,6 +795,356 @@ def lab_ssrf_scan():
 @app.route("/lab/ssrf-scanner/internal/<path:p>")
 def lab_ssrf_internal(p):
     abort(403)
+
+
+# ----------- Cyberthon: Token Forge / JWT (in-process) -----------
+import hashlib, hmac, base64 as b64, json as _json
+
+_JWT_FLAG = "FLAG{jwt_w34k_s3cr3t_cr4ck3d}"
+_JWT_SECRET = "password123"
+
+def _jwt_encode(payload, secret):
+    header = b64.urlsafe_b64encode(b'{"alg":"HS256","typ":"JWT"}').rstrip(b'=').decode()
+    pay = b64.urlsafe_b64encode(_json.dumps(payload).encode()).rstrip(b'=').decode()
+    sig_input = f"{header}.{pay}".encode()
+    sig = b64.urlsafe_b64encode(hmac.new(secret.encode(), sig_input, hashlib.sha256).digest()).rstrip(b'=').decode()
+    return f"{header}.{pay}.{sig}"
+
+def _jwt_decode(token, secret):
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    sig_input = f"{parts[0]}.{parts[1]}".encode()
+    expected = b64.urlsafe_b64encode(hmac.new(secret.encode(), sig_input, hashlib.sha256).digest()).rstrip(b'=').decode()
+    if not hmac.compare_digest(expected, parts[2]):
+        return None
+    padding = 4 - len(parts[1]) % 4
+    payload = b64.urlsafe_b64decode(parts[1] + "=" * padding)
+    return _json.loads(payload)
+
+_JWT_GUEST_TOKEN = _jwt_encode({"user": "guest", "role": "user"}, _JWT_SECRET)
+
+_JWT_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SecureVault — Token Auth</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f0a1a;--surface:rgba(25,15,45,.9);--border:rgba(168,85,247,.18);
+  --text:#e2e8f0;--text2:#64748b;--purple:#a855f7;--purple2:#9333ea;
+  --green:#22c55e;--red:#ef4444;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -10%,rgba(168,85,247,.06),transparent 70%)}
+.wrap{max-width:640px;margin:0 auto;padding:50px 20px 60px;position:relative;z-index:1}
+.card{background:var(--surface);backdrop-filter:blur(12px);border:1px solid var(--border);
+  border-radius:16px;padding:32px;margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--purple);padding:4px 12px;
+  border:1px solid rgba(168,85,247,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:28px;font-weight:900;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input,textarea{width:100%;padding:12px 14px;margin-bottom:16px;background:rgba(0,0,0,.4);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:14px var(--mono);outline:none;resize:vertical}
+textarea{min-height:80px}
+input:focus,textarea:focus{border-color:var(--purple);box-shadow:0 0 0 3px rgba(168,85,247,.12)}
+.btn{display:inline-block;padding:13px 28px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--purple2),var(--purple));
+  color:#fff;font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(168,85,247,.3)}
+#out{margin-top:16px;display:none;padding:14px;border-radius:10px;font:14px var(--mono);border:1px solid;word-break:break-all}
+.win{background:rgba(34,197,94,.08);color:var(--green);border-color:rgba(34,197,94,.25)!important;display:block!important}
+.bad{background:rgba(239,68,68,.08);color:var(--red);border-color:rgba(239,68,68,.25)!important;display:block!important}
+.token-box{background:rgba(0,0,0,.4);border:1px solid var(--border);border-radius:10px;
+  padding:14px;font:12px var(--mono);word-break:break-all;color:var(--purple);margin-bottom:16px;cursor:text;user-select:all}
+.info{background:rgba(168,85,247,.06);border:1px solid rgba(168,85,247,.15);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--text2)}
+.info code{color:var(--purple);font-family:var(--mono)}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+</style></head><body>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">سايبر ثون · JWT</span>
+    <h1>SecureVault</h1>
+    <p class="sub">Token-based authentication — you're logged in as guest</p>
+    <div class="info">
+      <b>🔐 Your session token (JWT):</b><br>
+      This token was given to you at login. The server uses it to verify who you are.
+    </div>
+    <label>Your JWT Token</label>
+    <div class="token-box" id="guest-token">""" + _JWT_GUEST_TOKEN + r"""</div>
+    <label>Enter a token to access the vault</label>
+    <textarea id="token" placeholder="Paste your JWT token here...">""" + _JWT_GUEST_TOKEN + r"""</textarea>
+    <button class="btn" onclick="check()">Access Vault</button>
+    <div id="out"></div>
+    <div class="hint">
+      <b>💡 Hint:</b> Decode the JWT at <code>jwt.io</code>. The algorithm is HS256.
+      The secret key is weak — try common passwords like <code>secret</code>, <code>password123</code>, etc.
+      Change the role to <code>admin</code> and re-sign the token.
+    </div>
+  </div>
+</div>
+<!-- JWT secret is: password123 (TODO: change before production!) -->
+<script>
+const out=document.getElementById('out');
+async function check(){
+  const token=document.getElementById('token').value.trim();
+  if(!token){alert('Enter a token');return}
+  out.className='';out.style.display='none';
+  const r=await fetch('/lab/jwt-forge/verify',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({token:token})});
+  const d=await r.json();
+  if(d.flag){out.className='win';out.innerHTML='<b>Welcome admin!</b><br>'+d.flag+'<br><span style="font-size:11px;opacity:.7">Submit this flag on the CTF platform.</span>'}
+  else if(d.user){out.className='bad';out.innerHTML='Logged in as <b>'+d.user+'</b> (role: '+d.role+')<br>Only admins can see the flag.'}
+  else{out.className='bad';out.textContent=d.error||'Invalid token'}
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/jwt-forge/")
+def lab_jwt():
+    return render_template_string(_JWT_PAGE)
+
+@app.route("/lab/jwt-forge/verify", methods=["POST"])
+def lab_jwt_verify():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    if not token:
+        return jsonify(error="Token required."), 400
+    payload = _jwt_decode(token, _JWT_SECRET)
+    if not payload:
+        return jsonify(error="Invalid or tampered token. Signature verification failed."), 401
+    if payload.get("role") == "admin":
+        return jsonify(user=payload.get("user", "admin"), role="admin", flag=_JWT_FLAG)
+    return jsonify(user=payload.get("user", "unknown"), role=payload.get("role", "unknown"))
+
+
+# ----------- Cyberthon: Ping Master / Command Injection (in-process) -----------
+
+_CMD_FLAG = "FLAG{c0mm4nd_1nj3ct10n_p1ng}"
+
+_CMD_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PingMaster — Network Diagnostics</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a1a0f;--surface:rgba(15,35,20,.9);--border:rgba(34,197,94,.18);
+  --text:#e2e8f0;--text2:#64748b;--green:#22c55e;--green2:#16a34a;
+  --red:#ef4444;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -10%,rgba(34,197,94,.06),transparent 70%)}
+.wrap{max-width:640px;margin:0 auto;padding:50px 20px 60px;position:relative;z-index:1}
+.card{background:var(--surface);backdrop-filter:blur(12px);border:1px solid var(--border);
+  border-radius:16px;padding:32px;margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--green);padding:4px 12px;
+  border:1px solid rgba(34,197,94,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:28px;font-weight:900;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+label{color:var(--text2);font-size:13px;font-weight:600;display:block;margin-bottom:6px}
+input{width:100%;padding:12px 14px;margin-bottom:16px;background:rgba(0,0,0,.4);
+  border:1px solid var(--border);border-radius:10px;color:var(--text);font:15px var(--font);outline:none}
+input:focus{border-color:var(--green);box-shadow:0 0 0 3px rgba(34,197,94,.12)}
+.btn{display:inline-block;padding:13px 28px;border:0;border-radius:10px;
+  background:linear-gradient(135deg,var(--green2),var(--green));
+  color:#fff;font:700 15px var(--font);cursor:pointer}
+.btn:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(34,197,94,.3)}
+#result{margin-top:20px;display:none}
+#result pre{background:rgba(0,0,0,.5);border:1px solid var(--border);border-radius:10px;
+  padding:16px;font:13px/1.7 var(--mono);color:var(--text);overflow-x:auto;white-space:pre-wrap;word-break:break-all;max-height:400px;overflow-y:auto}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+.info{background:rgba(34,197,94,.06);border:1px solid rgba(34,197,94,.15);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--text2)}
+.info code{color:var(--green);font-family:var(--mono)}
+</style></head><body>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">سايبر ثون · Command Injection</span>
+    <h1>PingMaster</h1>
+    <p class="sub">Network diagnostic tool — enter an IP to check connectivity</p>
+    <div class="info">
+      <b>🌐 How it works:</b> Enter an IP address and the server will run
+      <code>ping -c 1 &lt;your_input&gt;</code> and show you the result.
+    </div>
+    <label>IP Address</label>
+    <input id="ip" placeholder="8.8.8.8" autocomplete="off" value="8.8.8.8">
+    <button class="btn" onclick="ping()">Ping</button>
+    <div id="result">
+      <pre id="body"></pre>
+    </div>
+    <div class="hint">
+      <b>💡 Hint:</b> The server builds a shell command with your input.
+      What if your input contains <code>;</code> or <code>|</code>? Try:
+      <code>8.8.8.8; cat /flag.txt</code>
+    </div>
+  </div>
+</div>
+<!-- server runs: os.popen("ping -c 1 " + user_input) -->
+<script>
+const body=document.getElementById('body'),result=document.getElementById('result');
+async function ping(){
+  const ip=document.getElementById('ip').value.trim();
+  if(!ip){alert('Enter an IP');return}
+  body.textContent='Pinging...';result.style.display='block';
+  const r=await fetch('/lab/cmd-inject/ping',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:ip})});
+  const d=await r.json();
+  body.textContent=d.output||d.error||'No response';
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/cmd-inject/")
+def lab_cmd():
+    return render_template_string(_CMD_PAGE)
+
+@app.route("/lab/cmd-inject/ping", methods=["POST"])
+def lab_cmd_ping():
+    data = request.get_json(silent=True) or {}
+    ip = (data.get("ip") or "").strip()
+    if not ip:
+        return jsonify(error="IP address required."), 400
+    if len(ip) > 200:
+        return jsonify(error="Input too long."), 400
+    clean_ip = ip.split(";")[0].split("|")[0].split("&")[0].split("`")[0].strip()
+    has_injection = ip != clean_ip
+    ping_output = f"PING {clean_ip} ({clean_ip}): 56 data bytes\n64 bytes from {clean_ip}: icmp_seq=0 ttl=56 time=12.3 ms\n\n--- {clean_ip} ping statistics ---\n1 packets transmitted, 1 packets received, 0% packet loss"
+    if has_injection:
+        injected_part = ip[len(clean_ip):]
+        if "cat" in injected_part and ("flag" in injected_part or "/flag" in injected_part):
+            return jsonify(output=ping_output + "\n" + _CMD_FLAG)
+        elif "ls" in injected_part:
+            return jsonify(output=ping_output + "\napp.py\nflag.txt\nrequirements.txt")
+        elif "cat" in injected_part or "echo" in injected_part or "whoami" in injected_part:
+            return jsonify(output=ping_output + "\nctf-user")
+        elif "id" in injected_part:
+            return jsonify(output=ping_output + "\nuid=1000(ctf-user) gid=1000(ctf-user)")
+        else:
+            return jsonify(output=ping_output + "\nsh: command not found")
+    return jsonify(output=ping_output)
+
+
+# ----------- Cyberthon: Private Notes / IDOR (in-process) -----------
+
+_IDOR_FLAG = "FLAG{1d0r_n0t3_4cc3ss}"
+
+_IDOR_NOTES = {
+    1: {"owner": "admin", "title": "Top Secret", "content": f"Admin credentials backup.\nFlag: {_IDOR_FLAG}"},
+    2: {"owner": "you", "title": "My Shopping List", "content": "Milk, Eggs, Bread, Coffee"},
+    3: {"owner": "you", "title": "Meeting Notes", "content": "Team standup at 9 AM every Monday."},
+    4: {"owner": "admin", "title": "Server Config", "content": "DB password: Sup3rS3cur3!\nDon't share this."},
+    5: {"owner": "you", "title": "Homework", "content": "Finish the cybersecurity lab by Friday."},
+}
+
+_IDOR_PAGE = r"""
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NoteKeeper — Private Notes</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0f1a;--surface:rgba(15,20,40,.9);--border:rgba(251,191,36,.18);
+  --text:#e2e8f0;--text2:#64748b;--amber:#f59e0b;--amber2:#d97706;
+  --green:#22c55e;--red:#ef4444;--font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:15px/1.6 var(--font);min-height:100vh}
+body::before{content:'';position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 50% -10%,rgba(251,191,36,.06),transparent 70%)}
+.wrap{max-width:640px;margin:0 auto;padding:50px 20px 60px;position:relative;z-index:1}
+.card{background:var(--surface);backdrop-filter:blur(12px);border:1px solid var(--border);
+  border-radius:16px;padding:32px;margin-bottom:20px}
+.badge{display:inline-block;font:600 11px var(--mono);letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--amber);padding:4px 12px;
+  border:1px solid rgba(251,191,36,.25);border-radius:6px;margin-bottom:16px}
+h1{font-size:28px;font-weight:900;margin-bottom:4px}
+.sub{color:var(--text2);font-size:14px;margin-bottom:24px}
+.note{background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:10px;
+  padding:16px;margin-bottom:12px;cursor:pointer;transition:all .2s}
+.note:hover{border-color:var(--amber);transform:translateX(4px)}
+.note .title{font-weight:700;font-size:16px;margin-bottom:4px}
+.note .owner{font:12px var(--mono);color:var(--text2)}
+#detail{display:none;margin-top:16px}
+#detail pre{background:rgba(0,0,0,.4);border:1px solid var(--border);border-radius:10px;
+  padding:16px;font:14px/1.7 var(--mono);color:var(--text);white-space:pre-wrap}
+.info{background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.15);
+  border-radius:10px;padding:14px 18px;margin-bottom:20px;font-size:13px;color:var(--text2)}
+.info code{color:var(--amber);font-family:var(--mono)}
+.hint{color:var(--text2);font-size:12px;margin-top:20px;padding:12px;
+  border:1px dashed rgba(148,163,184,.15);border-radius:8px}
+</style></head><body>
+<div class="wrap">
+  <div class="card">
+    <span class="badge">سايبر ثون · IDOR</span>
+    <h1>NoteKeeper</h1>
+    <p class="sub">Logged in as <b>user 2</b> — your private notes</p>
+    <div class="info">
+      <b>📝 Your notes:</b> Click a note to view it. The API loads notes by their ID:
+      <code>GET /lab/idor-notes/note/&lt;id&gt;</code>
+    </div>
+    <div class="note" onclick="load(2)">
+      <div class="title">📄 My Shopping List</div>
+      <div class="owner">Note #2 · Owner: you</div>
+    </div>
+    <div class="note" onclick="load(3)">
+      <div class="title">📄 Meeting Notes</div>
+      <div class="owner">Note #3 · Owner: you</div>
+    </div>
+    <div class="note" onclick="load(5)">
+      <div class="title">📄 Homework</div>
+      <div class="owner">Note #5 · Owner: you</div>
+    </div>
+    <div style="margin-top:16px;padding:12px;border:1px solid rgba(239,68,68,.2);border-radius:10px;background:rgba(239,68,68,.05)">
+      <div style="font-weight:700;color:var(--red);font-size:14px">🔒 Admin's Notes (Note #1, #4)</div>
+      <div style="color:var(--text2);font-size:13px;margin-top:4px">These belong to the admin. You shouldn't be able to access them...</div>
+    </div>
+    <div id="detail">
+      <h3 id="d-title" style="margin-bottom:8px"></h3>
+      <pre id="d-body"></pre>
+    </div>
+    <div class="hint">
+      <b>💡 Hint:</b> The API returns notes by ID without checking ownership.
+      You can see notes #2, #3, #5 — but what about note <code>#1</code>?
+      Try: <code>/lab/idor-notes/note/1</code>
+    </div>
+  </div>
+</div>
+<script>
+const detail=document.getElementById('detail'),dtitle=document.getElementById('d-title'),dbody=document.getElementById('d-body');
+async function load(id){
+  detail.style.display='none';
+  const r=await fetch('/lab/idor-notes/note/'+id);
+  const d=await r.json();
+  if(d.title){
+    dtitle.textContent='📄 '+d.title+(d.owner==='admin'?' (ADMIN NOTE!)':'');
+    dbody.textContent=d.content;
+    detail.style.display='block';
+  } else {
+    dtitle.textContent='Error';dbody.textContent=d.error||'Not found';
+    detail.style.display='block';
+  }
+}
+</script>
+</body></html>
+"""
+
+@app.route("/lab/idor-notes/")
+def lab_idor():
+    return render_template_string(_IDOR_PAGE)
+
+@app.route("/lab/idor-notes/note/<int:nid>")
+def lab_idor_note(nid):
+    note = _IDOR_NOTES.get(nid)
+    if not note:
+        return jsonify(error="Note not found."), 404
+    return jsonify(id=nid, title=note["title"], owner=note["owner"], content=note["content"])
 
 
 class PgRowWrapper:
