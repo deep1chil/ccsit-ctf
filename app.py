@@ -1223,6 +1223,15 @@ def admin_delete_user():
     return jsonify(ok=True, deleted=email)
 
 
+@app.route("/admin/clear-solves", methods=["POST"])
+def admin_clear_solves():
+    if not ADMIN_KEY or request.headers.get("X-Admin-Key") != ADMIN_KEY:
+        abort(403)
+    qexec("DELETE FROM solves", ())
+    db().commit()
+    return jsonify(ok=True, msg="All solves cleared")
+
+
 def init_db():
     if USE_PG:
         conn = psycopg2.connect(DATABASE_URL)
